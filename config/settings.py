@@ -21,6 +21,22 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "drf_spectacular",
+
+     # Applications FasoIM
+    "accounts",
+    "sessions_app",
+    "imports_app",
+    "immerges",
+    "affectations",
+    "organisation",
+    "activites",
+    "sante",
+    "kits",
+    "repas",
+    "incidents",
+    "documents",
+    "notifications",
+    "audit",
 ]
 
 MIDDLEWARE = [

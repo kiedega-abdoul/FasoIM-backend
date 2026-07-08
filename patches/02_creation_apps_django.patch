@@ -1,0 +1,27 @@
+diff --git a/config/settings.py b/config/settings.py
+index d5ba336..f2b71e4 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -21,6 +21,22 @@ INSTALLED_APPS = [
+     "rest_framework",
+     "rest_framework_simplejwt",
+     "drf_spectacular",
++
++     # Applications FasoIM
++    "accounts",
++    "sessions_app",
++    "imports_app",
++    "immerges",
++    "affectations",
++    "organisation",
++    "activites",
++    "sante",
++    "kits",
++    "repas",
++    "incidents",
++    "documents",
++    "notifications",
++    "audit",
+ ]
+ 
+ MIDDLEWARE = [
