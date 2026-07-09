@@ -1,0 +1,799 @@
+import logging
+from dataclasses import dataclass
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
+from django.utils.text import slugify
+
+from .models import (
+    Acteur,
+    AffectationActeur,
+    AffectationPermission,
+    AffectationRole,
+    DelegationActeur,
+    DemandePermission,
+    Permission,
+    Role,
+    RolePermission,
+)
+from .repository import (
+    ActeurRepository,
+    AffectationActeurRepository,
+    AffectationPermissionRepository,
+    AffectationRoleRepository,
+    ControleAccesRepository,
+    DelegationActeurRepository,
+    DemandePermissionRepository,
+    PermissionRepository,
+    RolePermissionRepository,
+    RoleRepository,
+)
+
+logger = logging.getLogger(__name__)
+
+MOT_DE_PASSE_ACTEUR_PAR_DEFAUT = getattr(settings, "DEFAULT_ACTOR_PASSWORD", "password")
+
+
+@dataclass(frozen=True)
+class ResultatControleAcces:
+    autorise: bool
+    motif: str = ""
+    affectation: AffectationActeur | None = None
+
+
+class ServiceBase:
+    """Outils communs aux services métier accounts."""
+
+    @staticmethod
+    def normaliser_texte(valeur):
+        if valeur is None:
+            return ""
+        return str(valeur).strip()
+
+    @staticmethod
+    def normaliser_code(valeur):
+        valeur = ServiceBase.normaliser_texte(valeur)
+        if not valeur:
+            return ""
+        return slugify(valeur).replace("-", "_").upper()
+
+    @staticmethod
+    def identifiant(objet_ou_id):
+        return getattr(objet_ou_id, "id", objet_ou_id)
+
+    @staticmethod
+    def maintenant():
+        return timezone.now()
+
+    @staticmethod
+    def aujourd_hui():
+        return timezone.localdate()
+
+
+class ServiceAsynchroneAccounts:
+    """Points d'entrée Celery/Redis utilisés par les services accounts."""
+
+    @staticmethod
+    def envoyer_email_bienvenue_apres_commit(acteur_id, mot_de_passe_temporaire):
+        def _planifier():
+            try:
+                from .tasks import envoyer_email_bienvenue_acteur_task
+
+                envoyer_email_bienvenue_acteur_task.delay(acteur_id, mot_de_passe_temporaire)
+            except Exception:
+                logger.exception("Impossible de planifier l'email de bienvenue de l'acteur %s", acteur_id)
+
+        transaction.on_commit(_planifier)
+
+    @staticmethod
+    def supprimer_acteur_en_cascade_apres_commit(acteur_id, auteur_id=None):
+        def _planifier():
+            try:
+                from .tasks import supprimer_acteur_logiquement_en_cascade_task
+
+                supprimer_acteur_logiquement_en_cascade_task.delay(acteur_id, auteur_id)
+            except Exception:
+                logger.exception("Impossible de planifier la suppression logique de l'acteur %s", acteur_id)
+
+        transaction.on_commit(_planifier)
+
+    @staticmethod
+    def recalculer_cache_permissions_apres_commit(acteur_id):
+        def _planifier():
+            try:
+                from .tasks import recalculer_cache_permissions_acteur_task
+
+                recalculer_cache_permissions_acteur_task.delay(acteur_id)
+            except Exception:
+                logger.exception("Impossible de planifier le recalcul des permissions de l'acteur %s", acteur_id)
+
+        transaction.on_commit(_planifier)
+
+
+class ActeurService(ServiceBase):
+    """Gestion métier des acteurs internes FasoIM."""
+
+    @staticmethod
+    def generer_username(first_name, last_name, email=None):
+        base = slugify(f"{first_name or ''} {last_name or ''}".strip())
+        if not base and email:
+            base = slugify(str(email).split("@")[0])
+        if not base:
+            base = "acteur"
+
+        username = base
+        compteur = 1
+        while ActeurRepository.username_existe(username):
+            compteur += 1
+            username = f"{base}{compteur}"
+        return username[:150]
+
+    @staticmethod
+    @transaction.atomic
+    def creer_acteur(
+        *,
+        email,
+        first_name,
+        last_name,
+        username=None,
+        telephone=None,
+        titre="",
+        organisation="",
+        created_by=None,
+        is_staff=False,
+        is_superuser=False,
+        envoyer_email_bienvenue=True,
+    ):
+        email = ActeurService.normaliser_texte(email).lower()
+        first_name = ActeurService.normaliser_texte(first_name)
+        last_name = ActeurService.normaliser_texte(last_name)
+        username = ActeurService.normaliser_texte(username) or ActeurService.generer_username(first_name, last_name, email)
+        telephone = ActeurService.normaliser_texte(telephone) or None
+
+        if not email:
+            raise ValidationError({"email": "L'email est obligatoire."})
+        if not first_name:
+            raise ValidationError({"first_name": "Le prénom est obligatoire."})
+        if not last_name:
+            raise ValidationError({"last_name": "Le nom est obligatoire."})
+        if ActeurRepository.email_existe(email):
+            raise ValidationError({"email": "Cet email est déjà utilisé."})
+        if ActeurRepository.username_existe(username):
+            raise ValidationError({"username": "Ce nom d'utilisateur est déjà utilisé."})
+        if telephone and ActeurRepository.telephone_existe(telephone):
+            raise ValidationError({"telephone": "Ce téléphone est déjà utilisé."})
+
+        acteur = Acteur(
+            username=username,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            telephone=telephone,
+            titre=ActeurService.normaliser_texte(titre),
+            organisation=ActeurService.normaliser_texte(organisation),
+            statut=Acteur.Statut.ACTIF,
+            is_active=True,
+            is_staff=is_staff,
+            is_superuser=is_superuser,
+            created_by=created_by,
+        )
+        acteur.set_password(MOT_DE_PASSE_ACTEUR_PAR_DEFAUT)
+        acteur.full_clean()
+        acteur.save()
+
+        if envoyer_email_bienvenue:
+            ServiceAsynchroneAccounts.envoyer_email_bienvenue_apres_commit(
+                acteur.id,
+                MOT_DE_PASSE_ACTEUR_PAR_DEFAUT,
+            )
+
+        return acteur
+
+    @staticmethod
+    @transaction.atomic
+    def modifier_profil(acteur, *, first_name=None, last_name=None, telephone=None, titre=None, organisation=None):
+        acteur = ActeurRepository.get_actif_by_id(ActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+
+        if first_name is not None:
+            acteur.first_name = ActeurService.normaliser_texte(first_name)
+        if last_name is not None:
+            acteur.last_name = ActeurService.normaliser_texte(last_name)
+        if telephone is not None:
+            telephone = ActeurService.normaliser_texte(telephone) or None
+            if telephone and ActeurRepository.telephone_existe(telephone, exclude_id=acteur.id):
+                raise ValidationError({"telephone": "Ce téléphone est déjà utilisé."})
+            acteur.telephone = telephone
+        if titre is not None:
+            acteur.titre = ActeurService.normaliser_texte(titre)
+        if organisation is not None:
+            acteur.organisation = ActeurService.normaliser_texte(organisation)
+
+        acteur.full_clean()
+        acteur.save()
+        return acteur
+
+    @staticmethod
+    @transaction.atomic
+    def changer_mot_de_passe(acteur, nouveau_mot_de_passe):
+        acteur = ActeurRepository.get_actif_by_id(ActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+        if not nouveau_mot_de_passe:
+            raise ValidationError({"password": "Le nouveau mot de passe est obligatoire."})
+
+        acteur.set_password(nouveau_mot_de_passe)
+        acteur.save(update_fields=["password"])
+        return acteur
+
+    @staticmethod
+    @transaction.atomic
+    def desactiver_acteur(acteur, *, auteur=None):
+        acteur = ActeurRepository.get_actif_by_id(ActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou déjà inactif.")
+
+        acteur.is_active = False
+        acteur.statut = Acteur.Statut.DESACTIVE
+        acteur.save(update_fields=["is_active", "statut"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(acteur.id)
+        return acteur
+
+    @staticmethod
+    @transaction.atomic
+    def reactiver_acteur(acteur, *, auteur=None):
+        acteur = ActeurRepository.get_any_by_id(ActeurService.identifiant(acteur))
+        if not acteur or acteur.deleted_at is not None:
+            raise ValidationError("Acteur introuvable ou supprimé logiquement.")
+
+        acteur.is_active = True
+        acteur.statut = Acteur.Statut.ACTIF
+        acteur.save(update_fields=["is_active", "statut"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(acteur.id)
+        return acteur
+
+    @staticmethod
+    def supprimer_logiquement_async(acteur, *, auteur=None):
+        acteur_id = ActeurService.identifiant(acteur)
+        auteur_id = ActeurService.identifiant(auteur) if auteur else None
+        ServiceAsynchroneAccounts.supprimer_acteur_en_cascade_apres_commit(acteur_id, auteur_id)
+        return True
+
+    @staticmethod
+    @transaction.atomic
+    def supprimer_logiquement_synchrone(acteur, *, auteur=None):
+        acteur = Acteur.objects.select_for_update().filter(id=ActeurService.identifiant(acteur)).first()
+        if not acteur or acteur.deleted_at is not None:
+            return None
+
+        maintenant = ActeurService.maintenant()
+        suffixe = f"deleted-{acteur.id}-{int(maintenant.timestamp())}"
+
+        acteur.username = f"{suffixe}-{acteur.username}"[:150]
+        acteur.email = f"{suffixe}@deleted.fasoim.local"
+        if acteur.telephone:
+            acteur.telephone = suffixe[:30]
+        acteur.is_active = False
+        acteur.statut = Acteur.Statut.DESACTIVE
+        acteur.deleted_at = maintenant
+        acteur.save()
+
+        affectation_ids = list(
+            AffectationActeur.objects.filter(
+                acteur_id=acteur.id,
+                deleted_at__isnull=True,
+            ).values_list("id", flat=True)
+        )
+
+        AffectationRole.objects.filter(
+            affectation_acteur_id__in=affectation_ids,
+            deleted_at__isnull=True,
+        ).update(statut=AffectationRole.Statut.RETIRE, deleted_at=maintenant)
+
+        AffectationPermission.objects.filter(
+            affectation_acteur_id__in=affectation_ids,
+            deleted_at__isnull=True,
+        ).update(statut=AffectationPermission.Statut.RETIREE, deleted_at=maintenant)
+
+        DemandePermission.objects.filter(
+            acteur_id=acteur.id,
+            statut=DemandePermission.Statut.EN_ATTENTE,
+            deleted_at__isnull=True,
+        ).update(statut=DemandePermission.Statut.ANNULEE, date_decision=maintenant, deleted_at=maintenant)
+
+        DelegationActeur.objects.filter(
+            acteur_source_id=acteur.id,
+            deleted_at__isnull=True,
+        ).update(statut=DelegationActeur.Statut.ANNULEE, deleted_at=maintenant)
+
+        DelegationActeur.objects.filter(
+            acteur_cible_id=acteur.id,
+            deleted_at__isnull=True,
+        ).update(statut=DelegationActeur.Statut.ANNULEE, deleted_at=maintenant)
+
+        AffectationActeur.objects.filter(
+            id__in=affectation_ids,
+            deleted_at__isnull=True,
+        ).update(statut=AffectationActeur.Statut.ANNULEE, deleted_at=maintenant)
+
+        return acteur
+
+
+class RoleService(ServiceBase):
+    """Gestion métier des rôles."""
+
+    @staticmethod
+    @transaction.atomic
+    def creer_role_systeme(*, code, libelle, niveau, perimetre_autorise, description="", est_modifiable=False):
+        code = RoleService.normaliser_code(code)
+        if not code:
+            raise ValidationError({"code": "Le code du rôle est obligatoire."})
+        if RoleRepository.code_existe(code):
+            raise ValidationError({"code": "Ce code de rôle existe déjà."})
+
+        role = Role(
+            code=code,
+            libelle=RoleService.normaliser_texte(libelle),
+            description=RoleService.normaliser_texte(description),
+            niveau=niveau,
+            perimetre_autorise=perimetre_autorise,
+            est_systeme=True,
+            est_modifiable=est_modifiable,
+            statut=Role.Statut.ACTIF,
+        )
+        role.full_clean()
+        role.save()
+        return role
+
+    @staticmethod
+    @transaction.atomic
+    def creer_role_personnalise(*, libelle, niveau, perimetre_autorise, description=""):
+        libelle = RoleService.normaliser_texte(libelle)
+        if not libelle:
+            raise ValidationError({"libelle": "Le libellé du rôle est obligatoire."})
+
+        base = RoleService.normaliser_code(libelle)
+        code = f"ROLE_{base}"
+        compteur = 1
+        while RoleRepository.code_existe(code):
+            compteur += 1
+            code = f"ROLE_{base}_{compteur}"
+
+        role = Role(
+            code=code,
+            libelle=libelle,
+            description=RoleService.normaliser_texte(description),
+            niveau=niveau,
+            perimetre_autorise=perimetre_autorise,
+            est_systeme=False,
+            est_modifiable=True,
+            statut=Role.Statut.ACTIF,
+        )
+        role.full_clean()
+        role.save()
+        return role
+
+    @staticmethod
+    @transaction.atomic
+    def desactiver_role(role):
+        role = RoleRepository.get_actif_by_id(RoleService.identifiant(role))
+        if not role:
+            raise ValidationError("Rôle introuvable ou inactif.")
+        if role.est_systeme and not role.est_modifiable:
+            raise ValidationError("Ce rôle système n'est pas désactivable librement.")
+
+        role.statut = Role.Statut.INACTIF
+        role.save(update_fields=["statut", "updated_at"])
+        return role
+
+
+class PermissionService(ServiceBase):
+    """Gestion contrôlée du catalogue fermé des permissions."""
+
+    @staticmethod
+    @transaction.atomic
+    def creer_permission_systeme(*, code, libelle, module, description=""):
+        code = PermissionService.normaliser_texte(code)
+        if not code:
+            raise ValidationError({"code": "Le code de permission est obligatoire."})
+        if PermissionRepository.code_existe(code):
+            raise ValidationError({"code": "Cette permission existe déjà."})
+
+        permission = Permission(
+            code=code,
+            libelle=PermissionService.normaliser_texte(libelle),
+            module=PermissionService.normaliser_texte(module),
+            description=PermissionService.normaliser_texte(description),
+            est_systeme=True,
+            statut=Permission.Statut.ACTIVE,
+        )
+        permission.full_clean()
+        permission.save()
+        return permission
+
+    @staticmethod
+    @transaction.atomic
+    def desactiver_permission(permission):
+        permission = PermissionRepository.get_actif_by_id(PermissionService.identifiant(permission))
+        if not permission:
+            raise ValidationError("Permission introuvable ou inactive.")
+
+        permission.statut = Permission.Statut.INACTIVE
+        permission.save(update_fields=["statut", "updated_at"])
+        return permission
+
+
+class RolePermissionService(ServiceBase):
+    """Gestion des permissions attachées aux rôles."""
+
+    @staticmethod
+    @transaction.atomic
+    def ajouter_permission(role, permission, *, est_delegable=False, perimetre_delegation_max=""):
+        role = RoleRepository.get_actif_by_id(RolePermissionService.identifiant(role))
+        permission = PermissionRepository.get_actif_by_id(RolePermissionService.identifiant(permission))
+        if not role:
+            raise ValidationError("Rôle introuvable ou inactif.")
+        if not permission:
+            raise ValidationError("Permission introuvable ou inactive.")
+        if RolePermissionRepository.permission_deja_associee(role, permission):
+            raise ValidationError("Cette permission est déjà associée à ce rôle.")
+
+        lien = RolePermission(
+            role=role,
+            permission=permission,
+            est_delegable=est_delegable,
+            perimetre_delegation_max=perimetre_delegation_max,
+            statut=RolePermission.Statut.ACTIVE,
+        )
+        lien.full_clean()
+        lien.save()
+        return lien
+
+    @staticmethod
+    @transaction.atomic
+    def retirer_permission(role_permission):
+        lien = RolePermission.objects.select_for_update().filter(
+            id=RolePermissionService.identifiant(role_permission),
+            deleted_at__isnull=True,
+        ).first()
+        if not lien:
+            raise ValidationError("Lien rôle-permission introuvable.")
+
+        lien.statut = RolePermission.Statut.RETIREE
+        lien.deleted_at = RolePermissionService.maintenant()
+        lien.save(update_fields=["statut", "deleted_at", "updated_at"])
+        return lien
+
+
+class AffectationActeurService(ServiceBase):
+    """Gestion métier des affectations d'acteurs."""
+
+    @staticmethod
+    @transaction.atomic
+    def creer_affectation(
+        *,
+        acteur,
+        niveau_affectation,
+        session=None,
+        region_code="",
+        centre_id=None,
+        date_debut=None,
+        date_fin=None,
+        affecte_par=None,
+    ):
+        acteur = ActeurRepository.get_actif_by_id(AffectationActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+
+        affectation = AffectationActeur(
+            acteur=acteur,
+            session=session,
+            niveau_affectation=niveau_affectation,
+            region_code=AffectationActeurService.normaliser_texte(region_code),
+            centre_id=centre_id,
+            date_debut=date_debut or AffectationActeurService.aujourd_hui(),
+            date_fin=date_fin,
+            statut=AffectationActeur.Statut.ACTIVE,
+            affecte_par=affecte_par,
+        )
+        affectation.full_clean()
+        affectation.save()
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(acteur.id)
+        return affectation
+
+    @staticmethod
+    @transaction.atomic
+    def terminer_affectation(affectation):
+        affectation = AffectationActeur.objects.select_for_update().filter(
+            id=AffectationActeurService.identifiant(affectation),
+            deleted_at__isnull=True,
+        ).first()
+        if not affectation:
+            raise ValidationError("Affectation introuvable.")
+
+        affectation.statut = AffectationActeur.Statut.TERMINEE
+        affectation.date_fin = affectation.date_fin or AffectationActeurService.aujourd_hui()
+        affectation.save(update_fields=["statut", "date_fin", "updated_at"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(affectation.acteur_id)
+        return affectation
+
+
+class AffectationRoleService(ServiceBase):
+    """Attribution des rôles dans une affectation."""
+
+    @staticmethod
+    @transaction.atomic
+    def attribuer_role(affectation, role, *, attribue_par=None, date_attribution=None, date_expiration=None):
+        affectation = AffectationActeurRepository.get_active_by_id(AffectationRoleService.identifiant(affectation))
+        role = RoleRepository.get_actif_by_id(AffectationRoleService.identifiant(role))
+        if not affectation:
+            raise ValidationError("Affectation introuvable ou inactive.")
+        if not role:
+            raise ValidationError("Rôle introuvable ou inactif.")
+        if AffectationRoleRepository.role_deja_attribue(affectation, role):
+            raise ValidationError("Ce rôle est déjà attribué à cette affectation.")
+
+        attribution = AffectationRole(
+            affectation_acteur=affectation,
+            role=role,
+            date_attribution=date_attribution or AffectationRoleService.aujourd_hui(),
+            date_expiration=date_expiration,
+            statut=AffectationRole.Statut.ACTIF,
+            attribue_par=attribue_par,
+        )
+        attribution.full_clean()
+        attribution.save()
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(affectation.acteur_id)
+        return attribution
+
+    @staticmethod
+    @transaction.atomic
+    def retirer_role(affectation_role):
+        attribution = AffectationRole.objects.select_for_update().filter(
+            id=AffectationRoleService.identifiant(affectation_role),
+            deleted_at__isnull=True,
+        ).first()
+        if not attribution:
+            raise ValidationError("Attribution de rôle introuvable.")
+
+        attribution.statut = AffectationRole.Statut.RETIRE
+        attribution.deleted_at = AffectationRoleService.maintenant()
+        attribution.save(update_fields=["statut", "deleted_at", "updated_at"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(attribution.affectation_acteur.acteur_id)
+        return attribution
+
+
+class AffectationPermissionService(ServiceBase):
+    """Attribution des permissions directes exceptionnelles."""
+
+    @staticmethod
+    @transaction.atomic
+    def attribuer_permission_directe(
+        affectation,
+        permission,
+        *,
+        attribue_par=None,
+        date_attribution=None,
+        date_expiration=None,
+        est_delegable=False,
+        motif="",
+    ):
+        affectation = AffectationActeurRepository.get_active_by_id(AffectationPermissionService.identifiant(affectation))
+        permission = PermissionRepository.get_actif_by_id(AffectationPermissionService.identifiant(permission))
+        if not affectation:
+            raise ValidationError("Affectation introuvable ou inactive.")
+        if not permission:
+            raise ValidationError("Permission introuvable ou inactive.")
+        if AffectationPermissionRepository.permission_deja_attribuee(affectation, permission):
+            raise ValidationError("Cette permission directe est déjà attribuée à cette affectation.")
+
+        attribution = AffectationPermission(
+            affectation_acteur=affectation,
+            permission=permission,
+            date_attribution=date_attribution or AffectationPermissionService.aujourd_hui(),
+            date_expiration=date_expiration,
+            est_delegable=est_delegable,
+            motif=AffectationPermissionService.normaliser_texte(motif),
+            statut=AffectationPermission.Statut.ACTIVE,
+            attribue_par=attribue_par,
+        )
+        attribution.full_clean()
+        attribution.save()
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(affectation.acteur_id)
+        return attribution
+
+    @staticmethod
+    @transaction.atomic
+    def retirer_permission_directe(affectation_permission):
+        attribution = AffectationPermission.objects.select_for_update().filter(
+            id=AffectationPermissionService.identifiant(affectation_permission),
+            deleted_at__isnull=True,
+        ).first()
+        if not attribution:
+            raise ValidationError("Permission directe introuvable.")
+
+        attribution.statut = AffectationPermission.Statut.RETIREE
+        attribution.deleted_at = AffectationPermissionService.maintenant()
+        attribution.save(update_fields=["statut", "deleted_at", "updated_at"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(attribution.affectation_acteur.acteur_id)
+        return attribution
+
+
+class DemandePermissionService(ServiceBase):
+    """Cycle de demande, approbation et refus de permissions."""
+
+    @staticmethod
+    @transaction.atomic
+    def soumettre_demande(*, acteur, permission, justification, affectation=None):
+        acteur = ActeurRepository.get_actif_by_id(DemandePermissionService.identifiant(acteur))
+        permission = PermissionRepository.get_actif_by_id(DemandePermissionService.identifiant(permission))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+        if not permission:
+            raise ValidationError("Permission introuvable ou inactive.")
+        if DemandePermissionRepository.demande_en_attente_existe(acteur, permission, affectation):
+            raise ValidationError("Une demande identique est déjà en attente.")
+
+        demande = DemandePermission(
+            acteur=acteur,
+            affectation_acteur=affectation,
+            permission=permission,
+            justification=DemandePermissionService.normaliser_texte(justification),
+            statut=DemandePermission.Statut.EN_ATTENTE,
+        )
+        demande.full_clean()
+        demande.save()
+        return demande
+
+    @staticmethod
+    @transaction.atomic
+    def approuver_demande(demande, *, decideur, motif_decision="", date_expiration=None):
+        demande = DemandePermission.objects.select_for_update().filter(
+            id=DemandePermissionService.identifiant(demande),
+            deleted_at__isnull=True,
+        ).first()
+        if not demande or demande.statut != DemandePermission.Statut.EN_ATTENTE:
+            raise ValidationError("Demande introuvable ou non traitable.")
+
+        demande.statut = DemandePermission.Statut.APPROUVEE
+        demande.decideur = decideur
+        demande.date_decision = DemandePermissionService.maintenant()
+        demande.motif_decision = DemandePermissionService.normaliser_texte(motif_decision)
+        demande.save()
+
+        if demande.affectation_acteur_id:
+            AffectationPermissionService.attribuer_permission_directe(
+                demande.affectation_acteur,
+                demande.permission,
+                attribue_par=decideur,
+                date_expiration=date_expiration,
+                motif=f"Demande approuvée #{demande.id}",
+            )
+
+        return demande
+
+    @staticmethod
+    @transaction.atomic
+    def refuser_demande(demande, *, decideur, motif_decision=""):
+        demande = DemandePermission.objects.select_for_update().filter(
+            id=DemandePermissionService.identifiant(demande),
+            deleted_at__isnull=True,
+        ).first()
+        if not demande or demande.statut != DemandePermission.Statut.EN_ATTENTE:
+            raise ValidationError("Demande introuvable ou non traitable.")
+
+        demande.statut = DemandePermission.Statut.REFUSEE
+        demande.decideur = decideur
+        demande.date_decision = DemandePermissionService.maintenant()
+        demande.motif_decision = DemandePermissionService.normaliser_texte(motif_decision)
+        demande.save()
+        return demande
+
+
+class DelegationActeurService(ServiceBase):
+    """Gestion des délégations temporaires."""
+
+    @staticmethod
+    @transaction.atomic
+    def creer_delegation(
+        *,
+        acteur_source,
+        acteur_cible,
+        affectation_acteur,
+        type_delegation,
+        date_fin,
+        role=None,
+        permission=None,
+        motif="",
+        date_debut=None,
+    ):
+        acteur_source = ActeurRepository.get_actif_by_id(DelegationActeurService.identifiant(acteur_source))
+        acteur_cible = ActeurRepository.get_actif_by_id(DelegationActeurService.identifiant(acteur_cible))
+        affectation = AffectationActeurRepository.get_active_by_id(DelegationActeurService.identifiant(affectation_acteur))
+        if not acteur_source or not acteur_cible:
+            raise ValidationError("Acteur source ou cible introuvable/inactif.")
+        if not affectation:
+            raise ValidationError("Affectation introuvable ou inactive.")
+        if acteur_source.id == acteur_cible.id:
+            raise ValidationError("Un acteur ne peut pas se déléguer à lui-même.")
+        if DelegationActeurRepository.delegation_active_existe(acteur_source, acteur_cible, affectation):
+            raise ValidationError("Une délégation active existe déjà entre ces deux acteurs pour cette affectation.")
+
+        delegation = DelegationActeur(
+            acteur_source=acteur_source,
+            acteur_cible=acteur_cible,
+            affectation_acteur=affectation,
+            role=role,
+            permission=permission,
+            type_delegation=type_delegation,
+            date_debut=date_debut or DelegationActeurService.aujourd_hui(),
+            date_fin=date_fin,
+            motif=DelegationActeurService.normaliser_texte(motif),
+            statut=DelegationActeur.Statut.ACTIVE,
+        )
+        delegation.full_clean()
+        delegation.save()
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(acteur_cible.id)
+        return delegation
+
+    @staticmethod
+    @transaction.atomic
+    def terminer_delegation(delegation):
+        delegation = DelegationActeur.objects.select_for_update().filter(
+            id=DelegationActeurService.identifiant(delegation),
+            deleted_at__isnull=True,
+        ).first()
+        if not delegation:
+            raise ValidationError("Délégation introuvable.")
+
+        delegation.statut = DelegationActeur.Statut.TERMINEE
+        delegation.save(update_fields=["statut", "updated_at"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(delegation.acteur_cible_id)
+        return delegation
+
+
+class ControleAccesService(ServiceBase):
+    """Contrôle central des permissions et périmètres accounts."""
+
+    @staticmethod
+    def permissions_effectives(acteur, affectation):
+        acteur = ActeurRepository.get_actif_by_id(ControleAccesService.identifiant(acteur))
+        affectation = AffectationActeurRepository.get_active_by_id(ControleAccesService.identifiant(affectation))
+        if not acteur or not affectation or affectation.acteur_id != acteur.id:
+            return set()
+        return ControleAccesRepository.get_permission_codes_acteur(acteur, affectation)
+
+    @staticmethod
+    def acteur_peut(acteur, code_permission, *, affectation=None, session_id=None, region_code=None, centre_id=None):
+        acteur = ActeurRepository.get_actif_by_id(ControleAccesService.identifiant(acteur))
+        if not acteur:
+            return ResultatControleAcces(False, "Acteur introuvable ou inactif.")
+
+        affectations = AffectationActeurRepository.lister_actives_par_acteur(acteur)
+        if affectation is not None:
+            affectations = affectations.filter(id=ControleAccesService.identifiant(affectation))
+        if session_id is not None:
+            affectations = affectations.filter(session_id=session_id)
+        if region_code:
+            affectations = affectations.filter(region_code__iexact=region_code)
+        if centre_id is not None:
+            affectations = affectations.filter(centre_id=centre_id)
+
+        for affectation_active in affectations:
+            if ControleAccesRepository.acteur_a_permission(acteur, affectation_active, code_permission):
+                return ResultatControleAcces(True, affectation=affectation_active)
+
+        return ResultatControleAcces(False, "Permission absente ou hors périmètre.")
