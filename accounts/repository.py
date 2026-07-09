@@ -278,7 +278,7 @@ class AffectationActeurRepository(BaseRepository):
 
     @staticmethod
     def queryset():
-        return AffectationActeur.objects.select_related("acteur", "affecte_par")
+        return AffectationActeur.objects.select_related("acteur", "session", "affecte_par")
 
     @staticmethod
     def non_supprimes():

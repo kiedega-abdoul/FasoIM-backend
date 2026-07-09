@@ -165,23 +165,23 @@ class AffectationActeurAdmin(admin.ModelAdmin):
     list_display = [
         "acteur",
         "niveau_affectation",
-        "session_id",
+        "session",
         "region_code",
         "centre_id",
         "statut",
         "date_debut",
         "date_fin",
     ]
-    list_filter = ["niveau_affectation", "statut", "region_code", "deleted_at"]
+    list_filter = ["niveau_affectation", "session", "statut", "region_code", "deleted_at"]
     search_fields = ["acteur__username", "acteur__email", "acteur__first_name", "acteur__last_name", "region_code"]
-    autocomplete_fields = ["acteur", "affecte_par"]
-    list_select_related = ["acteur", "affecte_par"]
+    autocomplete_fields = ["acteur", "session", "affecte_par"]
+    list_select_related = ["acteur", "session", "affecte_par"]
     readonly_fields = ["created_at", "updated_at"]
     inlines = [AffectationRoleInline, AffectationPermissionInline]
 
     fieldsets = [
         ("Acteur", {"fields": ("acteur", "affecte_par")}),
-        ("Périmètre", {"fields": ("niveau_affectation", "session_id", "region_code", "centre_id")}),
+        ("Périmètre", {"fields": ("niveau_affectation", "session", "region_code", "centre_id")}),
         ("Validité", {"fields": ("date_debut", "date_fin", "statut")}),
         ("Suivi interne", {"classes": ("collapse",), "fields": ("created_at", "updated_at", "deleted_at")}),
     ]

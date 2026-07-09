@@ -210,7 +210,13 @@ class AffectationActeur(models.Model):
         on_delete=models.PROTECT,
         related_name="affectations",
     )
-    session_id = models.PositiveBigIntegerField(blank=True, null=True, db_index=True)
+    session = models.ForeignKey(
+        "sessions_app.SessionImmersion",
+        on_delete=models.PROTECT,
+        related_name="affectations_acteurs",
+        blank=True,
+        null=True,
+    )
     niveau_affectation = models.CharField(
         max_length=30,
         choices=NiveauAffectation.choices,
@@ -250,6 +256,9 @@ class AffectationActeur(models.Model):
     def clean(self):
         if self.date_fin and self.date_fin < self.date_debut:
             raise ValidationError({"date_fin": "La date de fin ne peut pas précéder la date de début."})
+
+        if self.niveau_affectation == self.NiveauAffectation.SESSION and not self.session_id:
+            raise ValidationError({"session": "La session est obligatoire pour une affectation session."})
 
         if self.niveau_affectation == self.NiveauAffectation.REGION and not self.region_code:
             raise ValidationError({"region_code": "La région est obligatoire pour une affectation régionale."})
