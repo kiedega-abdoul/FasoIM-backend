@@ -1,12 +1,12 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.dateparse import parse_date
-from rest_framework import filters, mixins, permissions, status, viewsets
+from rest_framework import filters, mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 
 from .models import ParametreSession, SessionImmersion
+from .permissions import PermissionParametreSession, PermissionSessionImmersion
 from .repository import ParametreSessionRepository, SessionImmersionRepository
 from .serializers import (
     ParametreSessionSerializer,
@@ -83,7 +83,7 @@ def appliquer_filtre_booleen(queryset, champ, valeur, nom_parametre):
 class SessionImmersionViewSet(viewsets.ModelViewSet):
     """API de gestion des sessions d'immersion."""
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [PermissionSessionImmersion]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "nom",
@@ -262,9 +262,6 @@ class SessionImmersionViewSet(viewsets.ModelViewSet):
         Elle permet de retrouver les sessions actives, archivées, annulées ou
         supprimées logiquement, sans exposer les champs techniques dans l'API normale.
         """
-        if not request.user.is_staff:
-            raise PermissionDenied("Accès réservé à l'administration.")
-
         queryset = SessionImmersion.objects.all().select_related("parametres")
         queryset = self.appliquer_filtres(queryset)
         serializer = SessionImmersionSerializer(
@@ -285,7 +282,7 @@ class ParametreSessionViewSet(
     """API de consultation et modification des paramètres de session."""
 
     serializer_class = ParametreSessionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [PermissionParametreSession]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "session__nom",
@@ -373,9 +370,6 @@ class ParametreSessionViewSet(
     @action(detail=False, methods=["get"], url_path="historique")
     def historique(self, request):
         """Historique des paramètres, réservé à l'administration."""
-        if not request.user.is_staff:
-            raise PermissionDenied("Accès réservé à l'administration.")
-
         queryset = ParametreSession.objects.all().select_related("session")
         queryset = self.appliquer_filtres(queryset)
         serializer = ParametreSessionSerializer(
