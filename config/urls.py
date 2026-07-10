@@ -22,6 +22,7 @@ urlpatterns = [
     # Module sessions
     path("api/sessions/", include("sessions_app.urls")),
     path("api/accounts/", include("accounts.urls")),
+    path("api/imports/", include("imports_app.urls")),
 
     # Auth JWT
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
