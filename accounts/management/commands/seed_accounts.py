@@ -160,6 +160,40 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("consulter_progression_immerges", "Consulter la progression immerges", "immerges", "Consulter la progression des tâches immergés."),
     PermissionDefinition("consulter_statistiques_immerges", "Consulter les statistiques immergés", "immerges", "Consulter les statistiques des immergés."),
     PermissionDefinition("confirmer_import_vers_immerges", "Confirmer un import vers immergés", "immerges", "Confirmer un import officiel vers le module immergés."),
+
+    # Affectations - régions
+    PermissionDefinition("creer_region", "Créer une région", "affectations", "Créer une région d'immersion."),
+    PermissionDefinition("modifier_region", "Modifier une région", "affectations", "Modifier une région d'immersion."),
+    PermissionDefinition("desactiver_region", "Désactiver une région", "affectations", "Désactiver logiquement une région d'immersion."),
+    PermissionDefinition("consulter_region", "Consulter une région", "affectations", "Consulter une région selon le périmètre autorisé."),
+    PermissionDefinition("lister_regions", "Lister les régions", "affectations", "Lister les régions selon le périmètre autorisé."),
+
+    # Affectations - centres
+    PermissionDefinition("creer_centre", "Créer un centre", "affectations", "Créer un centre d'immersion dans une région."),
+    PermissionDefinition("modifier_centre", "Modifier un centre", "affectations", "Modifier un centre selon le périmètre autorisé."),
+    PermissionDefinition("desactiver_centre", "Désactiver un centre", "affectations", "Désactiver logiquement un centre d'immersion."),
+    PermissionDefinition("mettre_centre_maintenance", "Mettre un centre en maintenance", "affectations", "Suspendre temporairement l'utilisation d'un centre."),
+    PermissionDefinition("reactiver_centre", "Réactiver un centre", "affectations", "Réactiver un centre désactivé ou en maintenance."),
+    PermissionDefinition("consulter_centre", "Consulter un centre", "affectations", "Consulter un centre selon le périmètre autorisé."),
+    PermissionDefinition("lister_centres", "Lister les centres", "affectations", "Lister les centres selon le périmètre autorisé."),
+    PermissionDefinition("verifier_capacite_centre", "Vérifier la capacité d'un centre", "affectations", "Consulter la capacité et l'occupation d'un centre."),
+
+    # Affectations - affectations régionales
+    PermissionDefinition("proposer_affectation_regionale", "Proposer une affectation régionale", "affectations", "Lancer la proposition automatique d'un lot d'affectations régionales."),
+    PermissionDefinition("affecter_region", "Affecter un immergé à une région", "affectations", "Effectuer une affectation régionale manuelle."),
+    PermissionDefinition("modifier_affectation_regionale", "Modifier une affectation régionale", "affectations", "Modifier, rejeter ou transférer une affectation régionale."),
+    PermissionDefinition("annuler_affectation_regionale", "Annuler une affectation régionale", "affectations", "Annuler logiquement une affectation régionale."),
+    PermissionDefinition("valider_affectation_regionale", "Valider une affectation régionale", "affectations", "Valider une ou plusieurs propositions régionales."),
+    PermissionDefinition("consulter_affectations_regionales", "Consulter les affectations régionales", "affectations", "Consulter les propositions et affectations régionales selon le périmètre."),
+
+    # Affectations - affectations centres
+    PermissionDefinition("proposer_affectation_centre", "Proposer une affectation centre", "affectations", "Lancer la proposition automatique d'un lot d'affectations aux centres."),
+    PermissionDefinition("affecter_centre", "Affecter un immergé à un centre", "affectations", "Effectuer une affectation centre manuelle."),
+    PermissionDefinition("modifier_affectation_centre", "Modifier une affectation centre", "affectations", "Modifier, rejeter ou transférer une affectation centre."),
+    PermissionDefinition("annuler_affectation_centre", "Annuler une affectation centre", "affectations", "Annuler logiquement une affectation centre."),
+    PermissionDefinition("valider_affectation_centre", "Valider une affectation centre", "affectations", "Valider une ou plusieurs propositions de centres."),
+    PermissionDefinition("verifier_compatibilite_centre", "Vérifier la compatibilité centre", "affectations", "Vérifier la compatibilité d'un immergé avec un centre."),
+    PermissionDefinition("consulter_affectations_centres", "Consulter les affectations centres", "affectations", "Consulter les propositions et affectations centres selon le périmètre."),
 ]
 
 
