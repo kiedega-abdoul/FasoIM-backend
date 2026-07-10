@@ -364,6 +364,9 @@ class AffectationActeurViewSet(mixins.DestroyModelMixin, AccountsReadCreateViewS
 
         return queryset.order_by("acteur__last_name", "acteur__first_name", "niveau_affectation")
 
+    def perform_create(self, serializer):
+        serializer.save(affecte_par=self.request.user)
+
     def destroy(self, request, *args, **kwargs):
         affectation = self.get_object()
         try:

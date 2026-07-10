@@ -63,7 +63,6 @@ class Role(models.Model):
         NATIONAL = "national", "National"
         REGION = "region", "Région"
         CENTRE = "centre", "Centre"
-        SESSION = "session", "Session"
 
     class Statut(models.TextChoices):
         ACTIF = "actif", "Actif"
@@ -197,7 +196,8 @@ class AffectationActeur(models.Model):
         NATIONAL = "national", "National"
         REGION = "region", "Région"
         CENTRE = "centre", "Centre"
-        SESSION = "session", "Session"
+
+    SESSION_STATUTS_ACTIFS = ("ouverte", "en_preparation", "en_cours")
 
     class Statut(models.TextChoices):
         ACTIVE = "active", "Active"
@@ -257,8 +257,8 @@ class AffectationActeur(models.Model):
         if self.date_fin and self.date_fin < self.date_debut:
             raise ValidationError({"date_fin": "La date de fin ne peut pas précéder la date de début."})
 
-        if self.niveau_affectation == self.NiveauAffectation.SESSION and not self.session_id:
-            raise ValidationError({"session": "La session est obligatoire pour une affectation session."})
+        if self.session_id and self.session and self.session.statut not in self.SESSION_STATUTS_ACTIFS:
+            raise ValidationError({"session": "Une affectation liée à une session exige une session opérationnelle."})
 
         if self.niveau_affectation == self.NiveauAffectation.REGION and not self.region_code:
             raise ValidationError({"region_code": "La région est obligatoire pour une affectation régionale."})
@@ -269,11 +269,16 @@ class AffectationActeur(models.Model):
     @property
     def est_active(self):
         aujourd_hui = timezone.localdate()
+        session_operationnelle = (
+            self.session_id is None
+            or (self.session is not None and self.session.statut in self.SESSION_STATUTS_ACTIFS)
+        )
         return (
             self.statut == self.Statut.ACTIVE
             and self.deleted_at is None
             and self.date_debut <= aujourd_hui
             and (self.date_fin is None or self.date_fin >= aujourd_hui)
+            and session_operationnelle
         )
 
 

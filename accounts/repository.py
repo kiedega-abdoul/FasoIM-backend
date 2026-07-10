@@ -276,6 +276,8 @@ class RolePermissionRepository(BaseRepository):
 class AffectationActeurRepository(BaseRepository):
     """Requêtes liées aux périmètres d'action des acteurs."""
 
+    SESSION_STATUTS_ACTIFS = ("ouverte", "en_preparation", "en_cours")
+
     @staticmethod
     def queryset():
         return AffectationActeur.objects.select_related("acteur", "session", "affecte_par")
@@ -292,6 +294,8 @@ class AffectationActeurRepository(BaseRepository):
             date_debut__lte=date_reference,
         ).filter(
             Q(date_fin__isnull=True) | Q(date_fin__gte=date_reference)
+        ).filter(
+            Q(session__isnull=True) | Q(session__statut__in=AffectationActeurRepository.SESSION_STATUTS_ACTIFS)
         )
 
     @staticmethod
@@ -328,7 +332,9 @@ class AffectationActeurRepository(BaseRepository):
         queryset = AffectationActeurRepository.lister_actives_par_acteur(acteur, date_reference)
 
         if session_id is not None:
-            queryset = queryset.filter(session_id=session_id)
+            queryset = queryset.filter(Q(session__isnull=True) | Q(session_id=session_id))
+        else:
+            queryset = queryset.filter(session__isnull=True)
         if region_code:
             queryset = queryset.filter(region_code__iexact=region_code)
         if centre_id is not None:

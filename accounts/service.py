@@ -473,6 +473,8 @@ class RolePermissionService(ServiceBase):
 class AffectationActeurService(ServiceBase):
     """Gestion métier des affectations d'acteurs."""
 
+    PERMISSION_AFFECTER_ACTEUR = "affecter_acteur_session"
+
     @staticmethod
     @transaction.atomic
     def creer_affectation(
@@ -490,11 +492,27 @@ class AffectationActeurService(ServiceBase):
         if not acteur:
             raise ValidationError("Acteur introuvable ou inactif.")
 
+        region_code = AffectationActeurService.normaliser_texte(region_code)
+        session_id = getattr(session, "id", session) if session is not None else None
+
+        if affecte_par is not None and not getattr(affecte_par, "is_superuser", False):
+            resultat = ControleAccesService.acteur_peut(
+                affecte_par,
+                AffectationActeurService.PERMISSION_AFFECTER_ACTEUR,
+                session_id=session_id,
+                region_code=region_code or None,
+                centre_id=centre_id,
+            )
+            if not resultat.autorise:
+                raise ValidationError(
+                    "L'acteur qui crée l'affectation n'a pas le droit d'agir sur ce périmètre."
+                )
+
         affectation = AffectationActeur(
             acteur=acteur,
             session=session,
             niveau_affectation=niveau_affectation,
-            region_code=AffectationActeurService.normaliser_texte(region_code),
+            region_code=region_code,
             centre_id=centre_id,
             date_debut=date_debut or AffectationActeurService.aujourd_hui(),
             date_fin=date_fin,
@@ -804,29 +822,37 @@ class ControleAccesService(ServiceBase):
     def affectation_couvre_perimetre(affectation, *, session_id=None, region_code=None, centre_id=None):
         """Vérifie si une affectation active couvre le périmètre demandé.
 
-        Une affectation plateforme ou nationale couvre les sessions sans devoir
-        stocker une ligne par session. Une affectation de session couvre seulement
-        sa session. Les affectations régionales et centre restent limitées à leur
-        région ou centre.
+        La session n'est pas un périmètre. Elle limite seulement une affectation
+        lorsqu'elle est renseignée. Une affectation liée à une session ne couvre
+        que les actions demandées pour cette même session. Une affectation sans
+        session reste permanente tant que son statut et ses dates sont actifs.
         """
         niveau = affectation.niveau_affectation
 
-        if niveau in (
-            AffectationActeur.NiveauAffectation.PLATEFORME,
-            AffectationActeur.NiveauAffectation.NATIONAL,
-        ):
-            return True
-
-        if session_id is not None and affectation.session_id not in (None, int(session_id)):
+        try:
+            session_id = int(session_id) if session_id is not None else None
+        except (TypeError, ValueError):
             return False
 
-        if niveau == AffectationActeur.NiveauAffectation.SESSION:
-            return session_id is not None and affectation.session_id == int(session_id)
+        try:
+            centre_id = int(centre_id) if centre_id is not None else None
+        except (TypeError, ValueError):
+            return False
+
+        if affectation.session_id is not None:
+            if session_id is None or affectation.session_id != session_id:
+                return False
+
+        if niveau == AffectationActeur.NiveauAffectation.PLATEFORME:
+            return True
+
+        if niveau == AffectationActeur.NiveauAffectation.NATIONAL:
+            return True
 
         if niveau == AffectationActeur.NiveauAffectation.REGION:
             return bool(region_code and affectation.region_code.lower() == str(region_code).lower())
 
         if niveau == AffectationActeur.NiveauAffectation.CENTRE:
-            return centre_id is not None and affectation.centre_id == int(centre_id)
+            return centre_id is not None and affectation.centre_id == centre_id
 
         return False
