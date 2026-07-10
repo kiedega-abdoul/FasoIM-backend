@@ -1,0 +1,1135 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from difflib import SequenceMatcher
+import re
+import unicodedata
+
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
+
+from immerges.models import Immerge
+from immerges.repository import ImmergeRepository
+
+from .models import (
+    AffectationCentre,
+    AffectationRegionale,
+    CentreImmersion,
+    RegionImmersion,
+)
+from .repository import (
+    STATUTS_CENTRES_OUVERTS,
+    STATUTS_REGIONAUX_OUVERTS,
+    AffectationCentreRepository,
+    AffectationRegionaleRepository,
+    CentreImmersionRepository,
+    CriteresImmergeAffectationRepository,
+    RegionImmersionRepository,
+)
+
+
+class ValidationAffectationErreur(ValidationError):
+    """Erreur métier lisible par l'API sans exposer les détails internes."""
+
+
+@dataclass(frozen=True)
+class ProfilAffectation:
+    """Profil uniforme construit depuis une table source d'immergé."""
+
+    immerge_id: int
+    origine_id: int
+    type_immerge: str
+    sexe: str = ""
+    date_naissance: object | None = None
+    region_reference: str = ""
+    province_reference: str = ""
+    niveau_examen: str = ""
+    serie_filiere: str = ""
+    specialite: str = ""
+    structure_origine: str = ""
+    niveau_etude: str = ""
+    profession: str = ""
+    identifiant_source: str = ""
+    source_valide: bool = True
+
+
+@dataclass
+class ResultatPropositionLot:
+    """Résultat sérialisable d'une proposition automatique par lot."""
+
+    demandes: int
+    candidats_pris: int
+    propositions_creees: int
+    candidats_restants: int
+    sans_source: list[int] = field(default_factory=list)
+    sans_destination: list[int] = field(default_factory=list)
+    affectation_ids: list[int] = field(default_factory=list)
+    details: dict = field(default_factory=dict)
+
+    def en_dict(self) -> dict:
+        return asdict(self)
+
+
+class NormalisationGeographiqueService:
+    """Normalise les libellés avant comparaison région/province."""
+
+    PREFIXES_REGION = (
+        "region administrative de ",
+        "region administrative du ",
+        "region administrative des ",
+        "region de ",
+        "region du ",
+        "region des ",
+        "region ",
+    )
+
+    @staticmethod
+    def normaliser(valeur: object) -> str:
+        texte = str(valeur or "").strip().lower()
+        texte = unicodedata.normalize("NFKD", texte)
+        texte = "".join(caractere for caractere in texte if not unicodedata.combining(caractere))
+        texte = re.sub(r"[^a-z0-9]+", " ", texte)
+        texte = " ".join(texte.split())
+
+        for prefixe in NormalisationGeographiqueService.PREFIXES_REGION:
+            if texte.startswith(prefixe):
+                texte = texte[len(prefixe):].strip()
+                break
+
+        # Les fichiers administratifs oscillent souvent entre singulier et
+        # pluriel : "Haut Bassin" et "Hauts-Bassins", par exemple.
+        morceaux = []
+        for morceau in texte.split():
+            if len(morceau) > 4 and morceau.endswith("s"):
+                morceau = morceau[:-1]
+            morceaux.append(morceau)
+        return " ".join(morceaux)
+
+    @classmethod
+    def score(cls, gauche: object, droite: object) -> float:
+        gauche_normalisee = cls.normaliser(gauche)
+        droite_normalisee = cls.normaliser(droite)
+
+        if not gauche_normalisee or not droite_normalisee:
+            return 0.0
+        if gauche_normalisee == droite_normalisee:
+            return 1.0
+
+        score_sequence = SequenceMatcher(
+            None,
+            gauche_normalisee,
+            droite_normalisee,
+        ).ratio()
+
+        tokens_gauche = set(gauche_normalisee.split())
+        tokens_droite = set(droite_normalisee.split())
+        union = tokens_gauche | tokens_droite
+        score_tokens = (
+            len(tokens_gauche & tokens_droite) / len(union)
+            if union
+            else 0.0
+        )
+        return max(score_sequence, score_tokens)
+
+
+class ProfilAffectationService:
+    """Résout en quelques requêtes les sources d'un lot d'immergés."""
+
+    @staticmethod
+    def _grouper_origines(immerges) -> dict[str, list[int]]:
+        groupes: dict[str, list[int]] = {}
+        for immerge in immerges:
+            groupes.setdefault(immerge.type_immerge, []).append(immerge.origine_id)
+        return groupes
+
+    @staticmethod
+    def _indexer(lignes) -> dict[int, dict]:
+        return {int(ligne["id"]): dict(ligne) for ligne in lignes}
+
+    @classmethod
+    def construire_profils(cls, immerges) -> tuple[dict[int, ProfilAffectation], list[int]]:
+        immerges = list(immerges)
+        groupes = cls._grouper_origines(immerges)
+
+        examens_ids = [
+            *groupes.get(Immerge.TypeImmerge.BEPC, []),
+            *groupes.get(Immerge.TypeImmerge.BAC, []),
+        ]
+        examens = cls._indexer(
+            CriteresImmergeAffectationRepository.sources_examens(examens_ids)
+        )
+        concours = cls._indexer(
+            CriteresImmergeAffectationRepository.sources_concours(
+                groupes.get(Immerge.TypeImmerge.CONCOURS, [])
+            )
+        )
+        selectionnes = cls._indexer(
+            CriteresImmergeAffectationRepository.sources_selectionnes(
+                groupes.get(Immerge.TypeImmerge.SELECTIONNE, [])
+            )
+        )
+        volontaires = cls._indexer(
+            CriteresImmergeAffectationRepository.sources_volontaires(
+                groupes.get(Immerge.TypeImmerge.VOLONTAIRE, [])
+            )
+        )
+
+        profils: dict[int, ProfilAffectation] = {}
+        sans_source: list[int] = []
+
+        for immerge in immerges:
+            source = None
+            profil = None
+
+            if immerge.type_immerge in {
+                Immerge.TypeImmerge.BEPC,
+                Immerge.TypeImmerge.BAC,
+            }:
+                source = examens.get(immerge.origine_id)
+                if source:
+                    profil = ProfilAffectation(
+                        immerge_id=immerge.id,
+                        origine_id=immerge.origine_id,
+                        type_immerge=immerge.type_immerge,
+                        sexe=source.get("sexe") or "",
+                        date_naissance=source.get("date_naissance"),
+                        region_reference=source.get("region_examen") or "",
+                        province_reference=source.get("province_examen") or "",
+                        niveau_examen=source.get("type_examen") or immerge.type_immerge,
+                        serie_filiere=source.get("serie") or "",
+                        structure_origine=source.get("etablissement_origine") or "",
+                        identifiant_source=source.get("numero_pv") or "",
+                    )
+
+            elif immerge.type_immerge == Immerge.TypeImmerge.CONCOURS:
+                source = concours.get(immerge.origine_id)
+                if source:
+                    profil = ProfilAffectation(
+                        immerge_id=immerge.id,
+                        origine_id=immerge.origine_id,
+                        type_immerge=immerge.type_immerge,
+                        sexe=source.get("sexe") or "",
+                        date_naissance=source.get("date_naissance"),
+                        region_reference=source.get("region_composition") or "",
+                        province_reference=source.get("province_composition") or "",
+                        specialite=source.get("specialite") or "",
+                        identifiant_source=source.get("numero_recepisse") or "",
+                    )
+
+            elif immerge.type_immerge == Immerge.TypeImmerge.SELECTIONNE:
+                source = selectionnes.get(immerge.origine_id)
+                if source:
+                    profil = ProfilAffectation(
+                        immerge_id=immerge.id,
+                        origine_id=immerge.origine_id,
+                        type_immerge=immerge.type_immerge,
+                        sexe=source.get("sexe") or "",
+                        date_naissance=source.get("date_naissance"),
+                        region_reference=source.get("region_structure") or "",
+                        province_reference=source.get("province_structure") or "",
+                        structure_origine=source.get("structure_origine") or "",
+                        identifiant_source=(
+                            source.get("matricule")
+                            or source.get("reference_selection")
+                            or ""
+                        ),
+                    )
+
+            elif immerge.type_immerge == Immerge.TypeImmerge.VOLONTAIRE:
+                source = volontaires.get(immerge.origine_id)
+                if source:
+                    profil = ProfilAffectation(
+                        immerge_id=immerge.id,
+                        origine_id=immerge.origine_id,
+                        type_immerge=immerge.type_immerge,
+                        sexe=source.get("sexe") or "",
+                        date_naissance=source.get("date_naissance"),
+                        region_reference=source.get("region_residence") or "",
+                        province_reference=source.get("province_residence") or "",
+                        niveau_etude=source.get("niveau_etude") or "",
+                        profession=source.get("profession") or "",
+                        identifiant_source=source.get("code_suivi") or "",
+                    )
+
+            if profil is None:
+                sans_source.append(immerge.id)
+            else:
+                profils[immerge.id] = profil
+
+        return profils, sans_source
+
+
+class CapaciteAffectationService:
+    """Interprète les agrégats bruts fournis par le repository."""
+
+    @staticmethod
+    def capacites_regions(session_id: int, region_ids: list[int]) -> dict[int, dict]:
+        capacites = {
+            int(ligne["region_id"]): {
+                "capacite_totale": int(ligne["capacite_totale_centres"] or 0),
+                "nombre_centres": int(ligne["nombre_centres"] or 0),
+                "occupation_ouverte": 0,
+                "disponible": int(ligne["capacite_totale_centres"] or 0),
+            }
+            for ligne in CentreImmersionRepository.capacites_totales_par_region(
+                region_ids=region_ids
+            )
+        }
+
+        for region_id in region_ids:
+            capacites.setdefault(
+                int(region_id),
+                {
+                    "capacite_totale": 0,
+                    "nombre_centres": 0,
+                    "occupation_ouverte": 0,
+                    "disponible": 0,
+                },
+            )
+
+        for ligne in AffectationRegionaleRepository.compter_par_region_et_statuts(
+            session_id=session_id,
+            statuts=STATUTS_REGIONAUX_OUVERTS,
+        ):
+            region_id = int(ligne["region_id"])
+            capacites.setdefault(
+                region_id,
+                {
+                    "capacite_totale": 0,
+                    "nombre_centres": 0,
+                    "occupation_ouverte": 0,
+                    "disponible": 0,
+                },
+            )
+            capacites[region_id]["occupation_ouverte"] = int(ligne["total"] or 0)
+
+        for donnees in capacites.values():
+            donnees["disponible"] = max(
+                0,
+                donnees["capacite_totale"] - donnees["occupation_ouverte"],
+            )
+
+        return capacites
+
+    @staticmethod
+    def capacites_centres(
+        *,
+        session_id: int,
+        centres: list[dict],
+        region_id: int,
+    ) -> dict[int, dict]:
+        capacites = {
+            int(centre["id"]): {
+                "capacite_totale": int(centre["capacite_totale"] or 0),
+                "occupation_ouverte": 0,
+                "disponible": int(centre["capacite_totale"] or 0),
+            }
+            for centre in centres
+        }
+
+        for ligne in AffectationCentreRepository.compter_par_centre_et_statuts(
+            session_id=session_id,
+            region_id=region_id,
+            statuts=STATUTS_CENTRES_OUVERTS,
+        ):
+            centre_id = int(ligne["centre_id"])
+            if centre_id in capacites:
+                capacites[centre_id]["occupation_ouverte"] = int(ligne["total"] or 0)
+
+        for donnees in capacites.values():
+            donnees["disponible"] = max(
+                0,
+                donnees["capacite_totale"] - donnees["occupation_ouverte"],
+            )
+
+        return capacites
+
+
+class AffectationRegionaleService:
+    """Propose, valide et rejette les affectations régionales."""
+
+    LIMITE_MAX_LOT = 1000
+    SEUIL_CORRESPONDANCE_FORTE = 0.82
+    SEUIL_CORRESPONDANCE_ASSOUPLIE = 0.55
+    SEUIL_RELIQUAT = 50
+
+    @classmethod
+    def valider_taille_lot(cls, nombre: int) -> int:
+        try:
+            nombre = int(nombre)
+        except (TypeError, ValueError) as exc:
+            raise ValidationAffectationErreur(
+                {"nombre": "Le nombre demandé doit être un entier."}
+            ) from exc
+
+        if nombre <= 0:
+            raise ValidationAffectationErreur(
+                {"nombre": "Le nombre demandé doit être strictement positif."}
+            )
+        if nombre > cls.LIMITE_MAX_LOT:
+            raise ValidationAffectationErreur(
+                {
+                    "nombre": (
+                        f"Un lot ne peut pas dépasser {cls.LIMITE_MAX_LOT} "
+                        "immergés afin de rester vérifiable."
+                    )
+                }
+            )
+        return nombre
+
+    @staticmethod
+    def _classer_regions(
+        *,
+        profil: ProfilAffectation,
+        regions: list[dict],
+        capacites: dict[int, dict],
+    ) -> list[tuple[float, int, dict]]:
+        classement = []
+        for region in regions:
+            region_id = int(region["id"])
+            disponible = capacites.get(region_id, {}).get("disponible", 0)
+            if disponible <= 0:
+                continue
+
+            score = NormalisationGeographiqueService.score(
+                profil.region_reference,
+                region.get("nom") or region.get("code"),
+            )
+            classement.append((score, disponible, region))
+
+        classement.sort(
+            key=lambda element: (
+                element[0],
+                element[1],
+                -int(element[2]["id"]),
+            ),
+            reverse=True,
+        )
+        return classement
+
+    @classmethod
+    def _choisir_region(
+        cls,
+        *,
+        profil: ProfilAffectation,
+        regions: list[dict],
+        capacites: dict[int, dict],
+        forcer_reliquat: bool,
+    ) -> tuple[dict | None, float, str]:
+        classement = cls._classer_regions(
+            profil=profil,
+            regions=regions,
+            capacites=capacites,
+        )
+        if not classement:
+            return None, 0.0, "aucune_capacite"
+
+        meilleur_score, _, meilleure_region = classement[0]
+
+        if meilleur_score >= cls.SEUIL_CORRESPONDANCE_FORTE:
+            return meilleure_region, meilleur_score, "correspondance_forte"
+
+        if meilleur_score >= cls.SEUIL_CORRESPONDANCE_ASSOUPLIE:
+            return meilleure_region, meilleur_score, "correspondance_assouplie"
+
+        if forcer_reliquat:
+            # Quand le reliquat devient petit, le service doit trouver une
+            # région disponible même si le libellé source est imparfait.
+            if meilleur_score > 0:
+                return meilleure_region, meilleur_score, "correspondance_assouplie"
+
+            region_capacitaire = max(
+                classement,
+                key=lambda element: (
+                    element[1],
+                    -int(element[2]["id"]),
+                ),
+            )
+            return (
+                region_capacitaire[2],
+                region_capacitaire[0],
+                "equilibrage_capacitaire",
+            )
+
+        return None, meilleur_score, "correspondance_insuffisante"
+
+    @classmethod
+    @transaction.atomic
+    def proposer_lot(
+        cls,
+        *,
+        session_id: int,
+        nombre: int,
+        acteur=None,
+        forcer_reliquat: bool = False,
+    ) -> ResultatPropositionLot:
+        nombre = cls.valider_taille_lot(nombre)
+        total_avant = (
+            CriteresImmergeAffectationRepository.compter_candidats_regionaux(
+                session_id=session_id,
+            )
+        )
+        if total_avant == 0:
+            return ResultatPropositionLot(
+                demandes=nombre,
+                candidats_pris=0,
+                propositions_creees=0,
+                candidats_restants=0,
+            )
+
+        candidats = list(
+            CriteresImmergeAffectationRepository.verrouiller_lot_candidats_regionaux(
+                session_id=session_id,
+                limite=nombre,
+            )
+        )
+        if not candidats:
+            return ResultatPropositionLot(
+                demandes=nombre,
+                candidats_pris=0,
+                propositions_creees=0,
+                candidats_restants=total_avant,
+            )
+
+        regions = list(RegionImmersionRepository.lister_donnees_algorithme())
+        if not regions:
+            raise ValidationAffectationErreur(
+                {"regions": "Aucune région active n'est disponible."}
+            )
+
+        region_ids = [int(region["id"]) for region in regions]
+        # Tous les services d'affectation doivent verrouiller les mêmes lignes
+        # régions avant de calculer les places disponibles.
+        list(RegionImmersionRepository.verrouiller_par_ids(region_ids))
+
+        capacites = CapaciteAffectationService.capacites_regions(
+            session_id,
+            region_ids,
+        )
+        if sum(donnees["disponible"] for donnees in capacites.values()) <= 0:
+            raise ValidationAffectationErreur(
+                {"capacite": "Aucune place régionale n'est disponible."}
+            )
+
+        profils, sans_source = ProfilAffectationService.construire_profils(candidats)
+        reliquat = forcer_reliquat or total_avant <= cls.SEUIL_RELIQUAT
+
+        propositions = []
+        sans_destination = []
+        repartition: dict[int, int] = {}
+
+        for immerge in candidats:
+            profil = profils.get(immerge.id)
+            if profil is None:
+                continue
+
+            region, score, mode = cls._choisir_region(
+                profil=profil,
+                regions=regions,
+                capacites=capacites,
+                forcer_reliquat=reliquat,
+            )
+            if region is None:
+                sans_destination.append(immerge.id)
+                continue
+
+            region_id = int(region["id"])
+            motif = (
+                "Proposition automatique régionale"
+                f" | région source={profil.region_reference or 'non renseignée'}"
+                f" | correspondance={round(score * 100)}%"
+                f" | mode={mode}"
+            )
+            propositions.append(
+                AffectationRegionale(
+                    immerge_id=immerge.id,
+                    session_id=session_id,
+                    region_id=region_id,
+                    statut=AffectationRegionale.Statut.PROPOSEE,
+                    affecte_par=acteur,
+                    motif=motif,
+                )
+            )
+            capacites[region_id]["disponible"] -= 1
+            repartition[region_id] = repartition.get(region_id, 0) + 1
+
+        creees = AffectationRegionaleRepository.creer_en_lot(propositions)
+        total_apres = max(0, total_avant - len(creees))
+
+        return ResultatPropositionLot(
+            demandes=nombre,
+            candidats_pris=len(candidats),
+            propositions_creees=len(creees),
+            candidats_restants=total_apres,
+            sans_source=sans_source,
+            sans_destination=sans_destination,
+            affectation_ids=[affectation.id for affectation in creees],
+            details={
+                "reliquat_assoupli": reliquat,
+                "repartition_par_region": repartition,
+            },
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def proposer_manuellement(
+        *,
+        immerge_id: int,
+        region_id: int,
+        acteur=None,
+        motif: str = "",
+    ):
+        immerge = (
+            CriteresImmergeAffectationRepository.filtrer_immerges(
+                immerge_ids=[immerge_id]
+            )
+            .select_for_update(of=("self",))
+            .first()
+        )
+        if immerge is None:
+            raise ValidationAffectationErreur(
+                {"immerge": "L'immergé demandé est introuvable."}
+            )
+        if AffectationRegionaleRepository.get_ouverte_par_immerge_pour_update(
+            immerge_id
+        ):
+            raise ValidationAffectationErreur(
+                {"immerge": "Cet immergé possède déjà une affectation régionale ouverte."}
+            )
+
+        region = RegionImmersionRepository.get_by_id_pour_update(region_id)
+        if not region.est_active:
+            raise ValidationAffectationErreur(
+                {"region": "La région choisie n'est pas active."}
+            )
+
+        capacites = CapaciteAffectationService.capacites_regions(
+            immerge.session_id,
+            [region.id],
+        )
+        if capacites[region.id]["disponible"] <= 0:
+            raise ValidationAffectationErreur(
+                {"region": "La capacité de cette région est atteinte."}
+            )
+
+        affectation = AffectationRegionaleRepository.creer(
+            immerge=immerge,
+            session_id=immerge.session_id,
+            region=region,
+            statut=AffectationRegionale.Statut.ACTIVE,
+            affecte_par=acteur,
+            motif=motif or "Affectation régionale manuelle.",
+        )
+        statut_region = getattr(Immerge.Statut, "AFFECTE_REGION", None)
+        if statut_region:
+            immerge.statut = statut_region
+            immerge.updated_at = timezone.now()
+            ImmergeRepository.mettre_a_jour_en_masse(
+                [immerge],
+                ["statut", "updated_at"],
+            )
+        return affectation
+
+    @staticmethod
+    @transaction.atomic
+    def valider_lot(affectation_ids, *, acteur=None, motif: str = "") -> list:
+        ids = list(dict.fromkeys(int(valeur) for valeur in affectation_ids))
+        affectations = list(AffectationRegionaleRepository.verrouiller_par_ids(ids))
+
+        if len(affectations) != len(ids):
+            raise ValidationAffectationErreur(
+                {"affectations": "Une ou plusieurs propositions sont introuvables."}
+            )
+
+        maintenant = timezone.now()
+        immerges = {
+            immerge.id: immerge
+            for immerge in CriteresImmergeAffectationRepository.filtrer_immerges(
+                immerge_ids=[affectation.immerge_id for affectation in affectations]
+            )
+        }
+        for affectation in affectations:
+            if affectation.statut != AffectationRegionale.Statut.PROPOSEE:
+                raise ValidationAffectationErreur(
+                    {
+                        "affectations": (
+                            f"L'affectation {affectation.id} n'est plus une proposition."
+                        )
+                    }
+                )
+            affectation.statut = AffectationRegionale.Statut.ACTIVE
+            affectation.affecte_par = acteur or affectation.affecte_par
+            affectation.date_affectation = maintenant
+            affectation.motif = motif or affectation.motif
+            affectation.updated_at = maintenant
+
+        AffectationRegionaleRepository.mettre_a_jour_en_lot(
+            affectations,
+            ["statut", "affecte_par", "date_affectation", "motif", "updated_at"],
+        )
+
+        statut_region = getattr(Immerge.Statut, "AFFECTE_REGION", None)
+        if statut_region:
+            for immerge in immerges.values():
+                immerge.statut = statut_region
+                immerge.updated_at = maintenant
+            ImmergeRepository.mettre_a_jour_en_masse(
+                list(immerges.values()),
+                ["statut", "updated_at"],
+            )
+
+        return affectations
+
+    @staticmethod
+    @transaction.atomic
+    def rejeter_lot(affectation_ids, *, motif: str) -> list:
+        if not str(motif or "").strip():
+            raise ValidationAffectationErreur(
+                {"motif": "Le motif de rejet est obligatoire."}
+            )
+
+        ids = list(dict.fromkeys(int(valeur) for valeur in affectation_ids))
+        affectations = list(AffectationRegionaleRepository.verrouiller_par_ids(ids))
+        if len(affectations) != len(ids):
+            raise ValidationAffectationErreur(
+                {"affectations": "Une ou plusieurs propositions sont introuvables."}
+            )
+
+        for affectation in affectations:
+            if affectation.statut != AffectationRegionale.Statut.PROPOSEE:
+                raise ValidationAffectationErreur(
+                    {
+                        "affectations": (
+                            f"L'affectation {affectation.id} n'est plus une proposition."
+                        )
+                    }
+                )
+            affectation.statut = AffectationRegionale.Statut.REJETEE
+            affectation.motif = motif
+            affectation.updated_at = timezone.now()
+
+        AffectationRegionaleRepository.mettre_a_jour_en_lot(
+            affectations,
+            ["statut", "motif", "updated_at"],
+        )
+        return affectations
+
+
+class AffectationCentreService:
+    """Propose les centres compatibles puis gère la validation du lot."""
+
+    LIMITE_MAX_LOT = 1000
+
+    @classmethod
+    def valider_taille_lot(cls, nombre: int) -> int:
+        return AffectationRegionaleService.valider_taille_lot(nombre)
+
+    @staticmethod
+    def _genre_compatible(sexe: str, genre_centre: str) -> bool:
+        sexe = str(sexe or "").strip().upper()
+        genre = str(genre_centre or "").strip().upper()
+
+        if genre == CentreImmersion.Genre.MIXTE:
+            return True
+        if sexe == "M":
+            return genre == CentreImmersion.Genre.MASCULIN
+        if sexe == "F":
+            return genre == CentreImmersion.Genre.FEMININ
+        return False
+
+    @staticmethod
+    def _public_compatible(type_immerge: str, publics_acceptes) -> bool:
+        publics = {
+            str(public).strip().upper()
+            for public in (publics_acceptes or [])
+            if str(public).strip()
+        }
+        if not publics:
+            return True
+        return str(type_immerge or "").strip().upper() in publics
+
+    @staticmethod
+    def _niveau_compatible(
+        profil: ProfilAffectation,
+        niveaux_acceptes,
+    ) -> bool:
+        # Ce filtre concerne en priorité BEPC/BAC. Les autres publics sont déjà
+        # filtrés par publics_acceptes.
+        if profil.type_immerge not in {
+            Immerge.TypeImmerge.BEPC,
+            Immerge.TypeImmerge.BAC,
+        }:
+            return True
+
+        niveaux = {
+            NormalisationGeographiqueService.normaliser(niveau)
+            for niveau in (niveaux_acceptes or [])
+            if str(niveau).strip()
+        }
+        if not niveaux:
+            return True
+
+        type_examen = NormalisationGeographiqueService.normaliser(
+            profil.niveau_examen or profil.type_immerge
+        )
+        serie = NormalisationGeographiqueService.normaliser(profil.serie_filiere)
+        combinaisons = {
+            type_examen,
+            serie,
+            NormalisationGeographiqueService.normaliser(
+                f"{type_examen} {serie}"
+            ),
+        }
+        combinaisons.discard("")
+        return bool(niveaux & combinaisons)
+
+    @classmethod
+    def _centres_compatibles(
+        cls,
+        *,
+        profil: ProfilAffectation,
+        centres: list[dict],
+        capacites: dict[int, dict],
+    ) -> list[tuple[float, float, int, dict]]:
+        compatibles = []
+
+        for centre in centres:
+            centre_id = int(centre["id"])
+            capacite = capacites.get(centre_id, {})
+            disponible = int(capacite.get("disponible", 0))
+            totale = int(capacite.get("capacite_totale", 0))
+            if disponible <= 0:
+                continue
+            if not cls._genre_compatible(profil.sexe, centre.get("genre")):
+                continue
+            if not cls._public_compatible(
+                profil.type_immerge,
+                centre.get("publics_acceptes"),
+            ):
+                continue
+            if not cls._niveau_compatible(
+                profil,
+                centre.get("niveaux_acceptes"),
+            ):
+                continue
+
+            score_province = NormalisationGeographiqueService.score(
+                profil.province_reference,
+                centre.get("province"),
+            )
+            taux_libre = disponible / totale if totale > 0 else 0.0
+            compatibles.append(
+                (score_province, taux_libre, disponible, centre)
+            )
+
+        compatibles.sort(
+            key=lambda element: (
+                element[0],
+                element[1],
+                element[2],
+                -int(element[3]["id"]),
+            ),
+            reverse=True,
+        )
+        return compatibles
+
+    @classmethod
+    @transaction.atomic
+    def proposer_lot(
+        cls,
+        *,
+        session_id: int,
+        region_id: int,
+        nombre: int,
+        acteur=None,
+    ) -> ResultatPropositionLot:
+        nombre = cls.valider_taille_lot(nombre)
+        total_avant = (
+            CriteresImmergeAffectationRepository.compter_candidats_centre(
+                session_id=session_id,
+                region_id=region_id,
+            )
+        )
+        if total_avant == 0:
+            return ResultatPropositionLot(
+                demandes=nombre,
+                candidats_pris=0,
+                propositions_creees=0,
+                candidats_restants=0,
+            )
+
+        candidats = list(
+            CriteresImmergeAffectationRepository.verrouiller_lot_candidats_centre(
+                session_id=session_id,
+                region_id=region_id,
+                limite=nombre,
+            )
+        )
+        if not candidats:
+            return ResultatPropositionLot(
+                demandes=nombre,
+                candidats_pris=0,
+                propositions_creees=0,
+                candidats_restants=total_avant,
+            )
+
+        centres = list(
+            CentreImmersionRepository.lister_donnees_algorithme(
+                region_id=region_id
+            )
+        )
+        if not centres:
+            raise ValidationAffectationErreur(
+                {"centres": "Aucun centre actif n'existe dans cette région."}
+            )
+
+        centre_ids = [int(centre["id"]) for centre in centres]
+        list(CentreImmersionRepository.verrouiller_par_ids(centre_ids))
+
+        capacites = CapaciteAffectationService.capacites_centres(
+            session_id=session_id,
+            centres=centres,
+            region_id=region_id,
+        )
+        profils, sans_source = ProfilAffectationService.construire_profils(candidats)
+
+        mappings_regionaux = {
+            int(ligne["immerge_id"]): dict(ligne)
+            for ligne in AffectationRegionaleRepository.mapping_actives_par_immerges(
+                [immerge.id for immerge in candidats]
+            )
+            if int(ligne["region_id"]) == int(region_id)
+        }
+
+        propositions = []
+        sans_destination = []
+        repartition: dict[int, int] = {}
+
+        for immerge in candidats:
+            profil = profils.get(immerge.id)
+            affectation_regionale = mappings_regionaux.get(immerge.id)
+            if profil is None or affectation_regionale is None:
+                if profil is not None:
+                    sans_destination.append(immerge.id)
+                continue
+
+            compatibles = cls._centres_compatibles(
+                profil=profil,
+                centres=centres,
+                capacites=capacites,
+            )
+            if not compatibles:
+                sans_destination.append(immerge.id)
+                continue
+
+            score_province, _, _, centre = compatibles[0]
+            centre_id = int(centre["id"])
+            motif = (
+                "Proposition automatique centre"
+                f" | sexe={profil.sexe or 'non renseigné'}"
+                f" | niveau={profil.niveau_examen or 'sans objet'}"
+                f" | série={profil.serie_filiere or 'sans objet'}"
+                f" | province source={profil.province_reference or 'non renseignée'}"
+                f" | correspondance province={round(score_province * 100)}%"
+            )
+            propositions.append(
+                AffectationCentre(
+                    immerge_id=immerge.id,
+                    session_id=session_id,
+                    affectation_regionale_id=affectation_regionale["id"],
+                    centre_id=centre_id,
+                    statut=AffectationCentre.Statut.PROPOSEE,
+                    affecte_par=acteur,
+                    motif=motif,
+                )
+            )
+            capacites[centre_id]["disponible"] -= 1
+            repartition[centre_id] = repartition.get(centre_id, 0) + 1
+
+        creees = AffectationCentreRepository.creer_en_lot(propositions)
+        total_apres = max(0, total_avant - len(creees))
+
+        return ResultatPropositionLot(
+            demandes=nombre,
+            candidats_pris=len(candidats),
+            propositions_creees=len(creees),
+            candidats_restants=total_apres,
+            sans_source=sans_source,
+            sans_destination=sans_destination,
+            affectation_ids=[affectation.id for affectation in creees],
+            details={"repartition_par_centre": repartition},
+        )
+
+    @classmethod
+    @transaction.atomic
+    def proposer_manuellement(
+        cls,
+        *,
+        immerge_id: int,
+        centre_id: int,
+        acteur=None,
+        motif: str = "",
+    ):
+        affectation_regionale = (
+            AffectationRegionaleRepository.get_active_par_immerge_pour_update(
+                immerge_id
+            )
+        )
+        if affectation_regionale is None:
+            raise ValidationAffectationErreur(
+                {"immerge": "L'immergé ne possède aucune affectation régionale active."}
+            )
+        if AffectationCentreRepository.get_ouverte_par_immerge_pour_update(
+            immerge_id
+        ):
+            raise ValidationAffectationErreur(
+                {"immerge": "Cet immergé possède déjà une affectation centre ouverte."}
+            )
+
+        centre = CentreImmersionRepository.get_by_id_pour_update(centre_id)
+        if centre.region_id != affectation_regionale.region_id:
+            raise ValidationAffectationErreur(
+                {"centre": "Le centre n'appartient pas à la région de l'immergé."}
+            )
+
+        immerge = affectation_regionale.immerge
+        profils, sans_source = ProfilAffectationService.construire_profils([immerge])
+        if sans_source:
+            raise ValidationAffectationErreur(
+                {"source": "La source valide de cet immergé est introuvable."}
+            )
+        profil = profils[immerge.id]
+
+        centre_donnees = {
+            "id": centre.id,
+            "region_id": centre.region_id,
+            "code": centre.code,
+            "nom": centre.nom,
+            "province": centre.province,
+            "ville": centre.ville,
+            "capacite_totale": centre.capacite_totale,
+            "genre": centre.genre,
+            "publics_acceptes": centre.publics_acceptes,
+            "niveaux_acceptes": centre.niveaux_acceptes,
+        }
+        capacites = CapaciteAffectationService.capacites_centres(
+            session_id=immerge.session_id,
+            centres=[centre_donnees],
+            region_id=centre.region_id,
+        )
+        if not cls._centres_compatibles(
+            profil=profil,
+            centres=[centre_donnees],
+            capacites=capacites,
+        ):
+            raise ValidationAffectationErreur(
+                {
+                    "centre": (
+                        "Le centre est plein ou incompatible avec le sexe, "
+                        "le public, le niveau ou la série de l'immergé."
+                    )
+                }
+            )
+
+        affectation = AffectationCentreRepository.creer(
+            immerge=immerge,
+            session_id=immerge.session_id,
+            affectation_regionale=affectation_regionale,
+            centre=centre,
+            statut=AffectationCentre.Statut.ACTIVE,
+            affecte_par=acteur,
+            motif=motif or "Affectation centre manuelle.",
+        )
+        statut_centre = getattr(Immerge.Statut, "AFFECTE_CENTRE", None)
+        if statut_centre:
+            immerge.statut = statut_centre
+            immerge.updated_at = timezone.now()
+            ImmergeRepository.mettre_a_jour_en_masse(
+                [immerge],
+                ["statut", "updated_at"],
+            )
+        return affectation
+
+    @staticmethod
+    @transaction.atomic
+    def valider_lot(affectation_ids, *, acteur=None, motif: str = "") -> list:
+        ids = list(dict.fromkeys(int(valeur) for valeur in affectation_ids))
+        affectations = list(AffectationCentreRepository.verrouiller_par_ids(ids))
+        if len(affectations) != len(ids):
+            raise ValidationAffectationErreur(
+                {"affectations": "Une ou plusieurs propositions sont introuvables."}
+            )
+
+        maintenant = timezone.now()
+        immerges = {
+            immerge.id: immerge
+            for immerge in CriteresImmergeAffectationRepository.filtrer_immerges(
+                immerge_ids=[affectation.immerge_id for affectation in affectations]
+            )
+        }
+        for affectation in affectations:
+            if affectation.statut != AffectationCentre.Statut.PROPOSEE:
+                raise ValidationAffectationErreur(
+                    {
+                        "affectations": (
+                            f"L'affectation {affectation.id} n'est plus une proposition."
+                        )
+                    }
+                )
+            affectation.statut = AffectationCentre.Statut.ACTIVE
+            affectation.affecte_par = acteur or affectation.affecte_par
+            affectation.date_affectation = maintenant
+            affectation.motif = motif or affectation.motif
+            affectation.updated_at = maintenant
+
+        AffectationCentreRepository.mettre_a_jour_en_lot(
+            affectations,
+            ["statut", "affecte_par", "date_affectation", "motif", "updated_at"],
+        )
+
+        statut_centre = getattr(Immerge.Statut, "AFFECTE_CENTRE", None)
+        if statut_centre:
+            for immerge in immerges.values():
+                immerge.statut = statut_centre
+                immerge.updated_at = maintenant
+            ImmergeRepository.mettre_a_jour_en_masse(
+                list(immerges.values()),
+                ["statut", "updated_at"],
+            )
+
+        return affectations
+
+    @staticmethod
+    @transaction.atomic
+    def rejeter_lot(affectation_ids, *, motif: str) -> list:
+        if not str(motif or "").strip():
+            raise ValidationAffectationErreur(
+                {"motif": "Le motif de rejet est obligatoire."}
+            )
+
+        ids = list(dict.fromkeys(int(valeur) for valeur in affectation_ids))
+        affectations = list(AffectationCentreRepository.verrouiller_par_ids(ids))
+        if len(affectations) != len(ids):
+            raise ValidationAffectationErreur(
+                {"affectations": "Une ou plusieurs propositions sont introuvables."}
+            )
+
+        for affectation in affectations:
+            if affectation.statut != AffectationCentre.Statut.PROPOSEE:
+                raise ValidationAffectationErreur(
+                    {
+                        "affectations": (
+                            f"L'affectation {affectation.id} n'est plus une proposition."
+                        )
+                    }
+                )
+            affectation.statut = AffectationCentre.Statut.REJETEE
+            affectation.motif = motif
+            affectation.updated_at = timezone.now()
+
+        AffectationCentreRepository.mettre_a_jour_en_lot(
+            affectations,
+            ["statut", "motif", "updated_at"],
+        )
+        return affectations
