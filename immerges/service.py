@@ -29,27 +29,43 @@ class ValidationMetierErreur(ValidationError):
 
 @dataclass(frozen=True)
 class SourceCentralisation:
+    """Petit objet de transport pour centraliser une source en Immerge.
+
+    Il évite de dupliquer les règles session/type/origine entre les
+    différentes sources : examens, concours, sélectionnés et volontaires.
+    """
+
     type_immerge: str
     origine_id: int
     session: Any
 
 
 class NettoyageImmergeService:
+    """Normalise les textes reçus des imports ou formulaires volontaires.
+
+    Cette classe ne valide pas le métier. Elle nettoie seulement les espaces,
+    emails, téléphones et champs d’identité avant l’enregistrement.
+    """
+
     @staticmethod
     def texte(valeur, *, upper=False):
+        """Nettoie une valeur texte et la met en majuscules si demandé."""
         valeur = " ".join(str(valeur or "").strip().split())
         return valeur.upper() if upper else valeur
 
     @staticmethod
     def email(valeur):
+        """Nettoie un email et le force en minuscules."""
         return NettoyageImmergeService.texte(valeur).lower()
 
     @staticmethod
     def telephone(valeur):
+        """Nettoie un numéro sans appliquer de format national strict."""
         return NettoyageImmergeService.texte(valeur)
 
     @staticmethod
     def nettoyer_identite(donnees: dict) -> dict:
+        """Nettoie les champs d’identité communs sans modifier l’objet original."""
         donnees = dict(donnees)
         for champ in ["nom", "prenoms", "nom_et_prenoms", "lieu_naissance", "nationalite"]:
             if champ in donnees:
@@ -65,12 +81,20 @@ class NettoyageImmergeService:
 
 
 class BrouillageSuppressionService:
+    """Brouille les champs uniques avant une suppression logique.
+
+    Objectif : garder l’historique supprimé sans bloquer une future recréation
+    avec le même numero_pv, code_suivi, code_fasoim, etc.
+    """
+
     @staticmethod
     def suffixe(objet):
+        """Construit un suffixe unique attaché à l’objet supprimé."""
         return f"__supprime__{objet.pk or 'x'}__{timezone.now().strftime('%Y%m%d%H%M%S')}"
 
     @staticmethod
     def brouiller_valeur(valeur, suffixe, longueur_max):
+        """Ajoute le suffixe de suppression en respectant la longueur du champ."""
         valeur = str(valeur or "").strip()
         if not valeur:
             return valeur
@@ -79,6 +103,8 @@ class BrouillageSuppressionService:
 
 
 class CodeFasoIMService:
+    """Génère les codes FasoIM et le contenu QR textuel des immergés."""
+
     PREFIXES = {
         Immerge.TypeImmerge.BEPC: "BEPC",
         Immerge.TypeImmerge.BAC: "BAC",
@@ -89,10 +115,12 @@ class CodeFasoIMService:
 
     @staticmethod
     def annee_session(session):
+        """Retourne l’année utilisée dans le code FasoIM."""
         return int(getattr(session, "annee", None) or timezone.now().year)
 
     @staticmethod
     def numero_promotion_session(session):
+        """Retourne le numéro de promotion, avec fallback calculé depuis l’année."""
         numero = getattr(session, "numero_promotion", None)
         if numero is None:
             annee = CodeFasoIMService.annee_session(session)
@@ -101,6 +129,7 @@ class CodeFasoIMService:
 
     @classmethod
     def generer_code(cls, *, session, type_immerge):
+        """Construit un code unique IP{annee}{type}{promotion}{sequence}."""
         prefixe = cls.PREFIXES.get(type_immerge)
         if not prefixe:
             raise ValidationMetierErreur({"type_immerge": "Type d'immergé non pris en charge."})
@@ -117,26 +146,36 @@ class CodeFasoIMService:
 
     @staticmethod
     def generer_qr_code(code_fasoim):
+        """Retourne le contenu textuel qui sera encodé plus tard en image QR."""
         # Pour l'instant on stocke le contenu textuel du QR. La génération image/PDF ira dans documents.
         return f"FASOIM:{code_fasoim}"
 
     @classmethod
     def generer_code_et_qr(cls, *, session, type_immerge):
+        """Génère en une seule étape le code FasoIM et son contenu QR."""
         code = cls.generer_code(session=session, type_immerge=type_immerge)
         return code, cls.generer_qr_code(code)
 
 
 class SourceImporteeServiceMixin:
+    """Base commune des services pour les sources issues des imports officiels.
+
+    Les classes filles définissent le modèle, le repository et les champs
+    uniques à brouiller en cas de suppression logique.
+    """
+
     model = None
     repository = None
     identifiant_fields: tuple[str, ...] = ()
 
     @classmethod
     def nettoyer(cls, donnees):
+        """Applique le nettoyage commun avant création ou modification."""
         return NettoyageImmergeService.nettoyer_identite(donnees)
 
     @classmethod
     def creer(cls, **donnees):
+        """Crée une ligne source après nettoyage et validation Django."""
         donnees = cls.nettoyer(donnees)
         objet = cls.model(**donnees)
         objet.full_clean()
@@ -145,6 +184,7 @@ class SourceImporteeServiceMixin:
 
     @classmethod
     def modifier(cls, objet, **donnees):
+        """Modifie une ligne source existante après nettoyage et validation."""
         donnees = cls.nettoyer(donnees)
         for champ, valeur in donnees.items():
             setattr(objet, champ, valeur)
@@ -154,6 +194,7 @@ class SourceImporteeServiceMixin:
 
     @classmethod
     def supprimer_logiquement(cls, objet):
+        """Supprime logiquement une source et brouille ses identifiants uniques."""
         suffixe = BrouillageSuppressionService.suffixe(objet)
         champs_update = ["deleted_at", "updated_at"]
         for champ in cls.identifiant_fields:
@@ -168,26 +209,35 @@ class SourceImporteeServiceMixin:
 
 
 class ImmergeExamenService(SourceImporteeServiceMixin):
+    """Service des sources d’immergés venant des examens BEPC/BAC."""
+
     model = ImmergeExamen
     repository = ImmergeExamenRepository
     identifiant_fields = ("numero_pv",)
 
 
 class ImmergeConcoursService(SourceImporteeServiceMixin):
+    """Service des sources d’immergés venant des concours."""
+
     model = ImmergeConcours
     repository = ImmergeConcoursRepository
     identifiant_fields = ("numero_recepisse",)
 
 
 class ImmergeSelectionneService(SourceImporteeServiceMixin):
+    """Service des sources d’immergés sélectionnés manuellement/officiellement."""
+
     model = ImmergeSelectionne
     repository = ImmergeSelectionneRepository
     identifiant_fields = ("matricule", "reference_selection")
 
 
 class InscriptionVolontaireService:
+    """Gère le cycle de vie des demandes volontaires."""
+
     @staticmethod
     def generer_code_suivi(session):
+        """Génère le code utilisé par le volontaire pour suivre sa demande."""
         annee = int(getattr(session, "annee", None) or timezone.now().year)
         sequence = InscriptionVolontaireRepository.actifs().filter(session=session).count() + 1
         while True:
@@ -198,6 +248,7 @@ class InscriptionVolontaireService:
 
     @staticmethod
     def creer(**donnees):
+        """Crée une demande volontaire et génère son code de suivi si absent."""
         donnees = NettoyageImmergeService.nettoyer_identite(donnees)
         session = donnees.get("session")
         if not donnees.get("code_suivi"):
@@ -209,6 +260,7 @@ class InscriptionVolontaireService:
 
     @staticmethod
     def modifier(inscription, **donnees):
+        """Modifie une demande volontaire sans changer sa décision métier."""
         donnees = NettoyageImmergeService.nettoyer_identite(donnees)
         for champ, valeur in donnees.items():
             setattr(inscription, champ, valeur)
@@ -219,6 +271,7 @@ class InscriptionVolontaireService:
     @staticmethod
     @transaction.atomic
     def accepter(inscription, *, acteur=None, motif_decision="", creer_immerge=True):
+        """Accepte une demande volontaire et crée l’Immerge central si demandé."""
         inscription.statut_demande = InscriptionVolontaire.StatutDemande.ACCEPTEE
         inscription.date_decision = timezone.now()
         inscription.motif_decision = motif_decision or inscription.motif_decision
@@ -231,6 +284,7 @@ class InscriptionVolontaireService:
 
     @staticmethod
     def rejeter(inscription, *, acteur=None, motif_decision=""):
+        """Rejette une demande volontaire avec un motif de décision."""
         inscription.statut_demande = InscriptionVolontaire.StatutDemande.REJETEE
         inscription.date_decision = timezone.now()
         inscription.motif_decision = motif_decision
@@ -241,6 +295,7 @@ class InscriptionVolontaireService:
 
     @staticmethod
     def annuler(inscription, *, motif_decision=""):
+        """Annule une demande volontaire sans créer d’Immerge central."""
         inscription.statut_demande = InscriptionVolontaire.StatutDemande.ANNULEE
         inscription.date_decision = timezone.now()
         inscription.motif_decision = motif_decision or inscription.motif_decision
@@ -250,6 +305,7 @@ class InscriptionVolontaireService:
 
     @staticmethod
     def supprimer_logiquement(inscription):
+        """Supprime logiquement une demande et brouille son code de suivi."""
         suffixe = BrouillageSuppressionService.suffixe(inscription)
         champs_update = ["deleted_at", "updated_at"]
         if inscription.code_suivi:
@@ -261,8 +317,11 @@ class InscriptionVolontaireService:
 
 
 class ImmergeSourceResolverService:
+    """Traduit une source métier en contexte de centralisation Immerge."""
+
     @staticmethod
     def construire(type_immerge, source):
+        """Déduit session, type et origine_id à partir de la source donnée."""
         if type_immerge in {Immerge.TypeImmerge.BEPC, Immerge.TypeImmerge.BAC}:
             session = source.import_officiel.session
         elif type_immerge == Immerge.TypeImmerge.CONCOURS:
@@ -277,6 +336,7 @@ class ImmergeSourceResolverService:
 
     @staticmethod
     def recuperer(immerge):
+        """Retrouve la source réelle d’un Immerge central."""
         if immerge.type_immerge in {Immerge.TypeImmerge.BEPC, Immerge.TypeImmerge.BAC}:
             return ImmergeExamenRepository.get_by_id(immerge.origine_id)
         if immerge.type_immerge == Immerge.TypeImmerge.CONCOURS:
@@ -289,9 +349,12 @@ class ImmergeSourceResolverService:
 
 
 class ImmergeService:
+    """Service central qui crée et gère la table Immerge."""
+
     @staticmethod
     @transaction.atomic
     def creer_depuis_source(*, type_immerge, source):
+        """Centralise une source en Immerge sans dupliquer les données personnelles."""
         contexte = ImmergeSourceResolverService.construire(type_immerge, source)
         existant = ImmergeRepository.actifs().filter(
             session=contexte.session,
@@ -320,25 +383,30 @@ class ImmergeService:
 
     @staticmethod
     def creer_depuis_examen(examen):
+        """Crée l’Immerge central à partir d’une source examen."""
         type_immerge = examen.type_examen if examen.type_examen in {Immerge.TypeImmerge.BEPC, Immerge.TypeImmerge.BAC} else Immerge.TypeImmerge.BEPC
         return ImmergeService.creer_depuis_source(type_immerge=type_immerge, source=examen)
 
     @staticmethod
     def creer_depuis_concours(concours):
+        """Crée l’Immerge central à partir d’une source concours."""
         return ImmergeService.creer_depuis_source(type_immerge=Immerge.TypeImmerge.CONCOURS, source=concours)
 
     @staticmethod
     def creer_depuis_selectionne(selectionne):
+        """Crée l’Immerge central à partir d’une source sélectionnée."""
         return ImmergeService.creer_depuis_source(type_immerge=Immerge.TypeImmerge.SELECTIONNE, source=selectionne)
 
     @staticmethod
     def creer_depuis_volontaire(inscription):
+        """Crée l’Immerge central uniquement pour une inscription volontaire acceptée."""
         if inscription.statut_demande != InscriptionVolontaire.StatutDemande.ACCEPTEE:
             raise ValidationMetierErreur({"statut_demande": "Seule une inscription volontaire acceptée peut créer un immergé."})
         return ImmergeService.creer_depuis_source(type_immerge=Immerge.TypeImmerge.VOLONTAIRE, source=inscription)
 
     @staticmethod
     def changer_statut(immerge, statut):
+        """Change le statut administratif d’un Immerge central."""
         immerge.statut = statut
         immerge.full_clean()
         immerge.save(update_fields=["statut", "updated_at"])
@@ -346,6 +414,7 @@ class ImmergeService:
 
     @staticmethod
     def generer_code_si_absent(immerge):
+        """Génère code FasoIM/QR pour un Immerge qui n’en possède pas encore."""
         if immerge.code_fasoim and immerge.qr_code:
             return immerge
         code_fasoim, qr_code = CodeFasoIMService.generer_code_et_qr(
@@ -356,6 +425,7 @@ class ImmergeService:
 
     @staticmethod
     def supprimer_logiquement(immerge):
+        """Supprime logiquement un Immerge central et brouille code/QR."""
         suffixe = BrouillageSuppressionService.suffixe(immerge)
         champs_update = ["deleted_at", "updated_at"]
         if immerge.code_fasoim:
@@ -367,6 +437,7 @@ class ImmergeService:
         immerge.deleted_at = timezone.now()
         immerge.save(update_fields=champs_update)
         return immerge
+
 
 class ImportVersImmergeService:
     """Pont métier entre imports_app et immerges.
@@ -429,6 +500,7 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _donnees_ligne(ligne):
+        """Récupère les données normalisées de LigneImport, sinon les données brutes."""
         donnees = dict(ligne.donnees_normalisees or {})
         if not donnees:
             donnees = dict(ligne.donnees_brutes or {})
@@ -436,10 +508,12 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _extraire(donnees, champs):
+        """Garde seulement les champs compatibles avec la table source ciblée."""
         return {champ: donnees.get(champ) for champ in champs if champ in donnees}
 
     @staticmethod
     def _base_source(import_officiel, ligne, donnees):
+        """Prépare les champs communs entre LigneImport et table source immerges."""
         return {
             "import_officiel": import_officiel,
             "numero_ligne_import": ligne.numero_ligne,
@@ -449,6 +523,7 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _creer_depuis_examen(import_officiel, ligne):
+        """Transforme une LigneImport BAC/BEPC en ImmergeExamen puis Immerge."""
         donnees = ImportVersImmergeService._donnees_ligne(ligne)
         payload = ImportVersImmergeService._base_source(import_officiel, ligne, donnees)
         payload.update(ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_EXAMEN))
@@ -465,6 +540,7 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _creer_depuis_concours(import_officiel, ligne):
+        """Transforme une LigneImport concours en ImmergeConcours puis Immerge."""
         donnees = ImportVersImmergeService._donnees_ligne(ligne)
         payload = ImportVersImmergeService._base_source(import_officiel, ligne, donnees)
         payload.update(ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_CONCOURS))
@@ -475,6 +551,7 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _creer_depuis_selectionne(import_officiel, ligne):
+        """Transforme une LigneImport sélectionnée en ImmergeSelectionne puis Immerge."""
         donnees = ImportVersImmergeService._donnees_ligne(ligne)
         payload = ImportVersImmergeService._base_source(import_officiel, ligne, donnees)
         payload.update(ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_SELECTIONNE))
@@ -485,6 +562,7 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _creer_depuis_volontaire(import_officiel, ligne, *, confirme_par=None):
+        """Transforme une LigneImport volontaire en inscription acceptée puis Immerge."""
         donnees = ImportVersImmergeService._donnees_ligne(ligne)
         payload = ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_VOLONTAIRE)
         payload.update(
@@ -502,6 +580,7 @@ class ImportVersImmergeService:
 
     @staticmethod
     def _creer_source_et_immerge(import_officiel, ligne, *, confirme_par=None):
+        """Route la LigneImport vers le bon créateur selon type_source."""
         from imports_app.models import ImportOfficiel
 
         type_source = import_officiel.type_source
@@ -518,6 +597,13 @@ class ImportVersImmergeService:
     @staticmethod
     @transaction.atomic
     def confirmer_import(import_id, *, confirme_par=None):
+        """Confirme un ImportOfficiel et crée les sources + Immerge centraux.
+
+        Méthode appelée par imports_app.tasks.confirmer_import_task. Elle est
+        transactionnelle : les lignes valides sont verrouillées, transformées,
+        marquées IMPORTEE ou ERREUR, puis les statistiques de l’import sont
+        recalculées.
+        """
         from imports_app.models import ImportOfficiel, LigneImport
         from imports_app.repository import ImportOfficielRepository, LigneImportRepository
 

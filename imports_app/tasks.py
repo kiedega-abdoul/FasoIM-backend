@@ -28,14 +28,17 @@ class ProgressionImportService:
 
     @staticmethod
     def cle_progression(import_id):
+        """Retourne la clé Redis/cache qui stocke la progression visible au frontend."""
         return f"imports:import:{import_id}:progression"
 
     @staticmethod
     def cle_verrou(import_id, operation):
+        """Retourne la clé Redis/cache utilisée pour éviter deux traitements simultanés."""
         return f"imports:import:{import_id}:lock:{operation}"
 
     @classmethod
     def definir(cls, import_id, *, pourcentage=0, message="", operation=""):
+        """Enregistre l’état courant du traitement pour l’affichage frontend."""
         donnees = {
             "import_id": import_id,
             "operation": operation,
@@ -48,6 +51,7 @@ class ProgressionImportService:
 
     @classmethod
     def lire(cls, import_id):
+        """Lit la progression courante ou retourne un état par défaut."""
         return cache.get(cls.cle_progression(import_id)) or {
             "import_id": import_id,
             "operation": "",
@@ -57,15 +61,18 @@ class ProgressionImportService:
 
     @classmethod
     def terminer(cls, import_id, *, operation="", message="Traitement terminé."):
+        """Marque une opération asynchrone comme terminée côté progression."""
         return cls.definir(import_id, pourcentage=100, message=message, operation=operation)
 
     @classmethod
     def echouer(cls, import_id, *, operation="", message="Traitement en échec."):
+        """Marque une opération asynchrone comme échouée côté progression."""
         return cls.definir(import_id, pourcentage=100, message=message, operation=operation)
 
     @classmethod
     @contextmanager
     def verrou(cls, import_id, operation):
+        """Pose un verrou court pour empêcher le double traitement d’un import."""
         cle = cls.cle_verrou(import_id, operation)
         acquis = cache.add(cle, timezone.now().isoformat(), timeout=cls.EXPIRATION_VERROU)
         try:
@@ -76,12 +83,14 @@ class ProgressionImportService:
 
 
 def _message_exception(erreur):
+    """Transforme une exception en message lisible pour l’import et Redis/cache."""
     if isinstance(erreur, ValidationError):
         return str(erreur.message_dict if hasattr(erreur, "message_dict") else erreur.messages)
     return str(erreur)
 
 
 def _mettre_import_en_echec_si_possible(import_id, message):
+    """Passe l’import en ECHEC si le dossier existe encore."""
     import_officiel = ImportOfficielRepository.get_by_id(import_id)
     if not import_officiel:
         return None
@@ -215,6 +224,8 @@ def confirmer_import_task(self, import_id, confirme_par_id=None):
 
                 confirme_par = get_user_model().objects.filter(id=confirme_par_id).first()
 
+            # Import local volontaire : éviter une dépendance circulaire au chargement Django.
+            # C’est le lien réel imports_app -> immerges lors de la confirmation finale.
             from immerges.service import ImportVersImmergeService
 
             resultat = ImportVersImmergeService.confirmer_import(
