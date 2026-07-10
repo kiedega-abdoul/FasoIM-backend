@@ -212,7 +212,7 @@ class AffectationRegionale(models.Model):
     statut = models.CharField(
         max_length=20,
         choices=Statut.choices,
-        default=Statut.ACTIVE,
+        default=Statut.PROPOSEE,
     )
     affecte_par = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -385,7 +385,7 @@ class AffectationCentre(models.Model):
     statut = models.CharField(
         max_length=20,
         choices=Statut.choices,
-        default=Statut.ACTIVE,
+        default=Statut.PROPOSEE,
     )
     affecte_par = models.ForeignKey(
         settings.AUTH_USER_MODEL,
