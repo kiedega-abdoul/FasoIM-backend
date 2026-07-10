@@ -51,6 +51,7 @@ class ImportOfficiel(models.Model):
 
     statut = models.CharField(max_length=40, choices=Statut.choices, default=Statut.RECU, db_index=True)
     colonnes_detectees = models.JSONField(default=list, blank=True)
+    parametres_lecture = models.JSONField(default=dict, blank=True)
     apercu_lignes = models.JSONField(default=list, blank=True)
     message_erreur = models.TextField(blank=True, default="")
     commentaire = models.TextField(blank=True, default="")
@@ -122,6 +123,9 @@ class ImportOfficiel(models.Model):
 
         if self.statut == self.Statut.CORRESPONDANCE_REQUISE and not self.colonnes_detectees:
             erreurs["colonnes_detectees"] = "Les colonnes détectées sont obligatoires quand la correspondance est requise."
+
+        if self.parametres_lecture and not isinstance(self.parametres_lecture, dict):
+            erreurs["parametres_lecture"] = "Les paramètres de lecture doivent être un objet JSON."
 
         if self.statut == self.Statut.ECHEC and not self.message_erreur:
             erreurs["message_erreur"] = "Le message d'erreur est obligatoire pour un import en échec."
