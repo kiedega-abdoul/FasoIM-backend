@@ -76,7 +76,7 @@ class ImportOfficielRepository(BaseImportRepository):
     @staticmethod
     def get_by_id_pour_update(import_id):
         return (
-            ImportOfficiel.objects.select_for_update()
+            ImportOfficiel.objects.select_for_update(of=("self",))
             .select_related(
                 "session",
                 "importe_par",

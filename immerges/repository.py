@@ -46,7 +46,7 @@ class SourceImporteeRepositoryMixin:
 
     @classmethod
     def get_by_id_pour_update(cls, source_id):
-        return cls.actifs().select_for_update().get(id=source_id)
+        return cls.actifs().select_for_update(of=("self",)).get(id=source_id)
 
     @classmethod
     def lister(cls, *, import_officiel_id=None, session_id=None, statut_validation=None, recherche=None):
@@ -228,7 +228,7 @@ class InscriptionVolontaireRepository:
 
     @staticmethod
     def get_by_id_pour_update(inscription_id):
-        return InscriptionVolontaireRepository.actifs().select_for_update().get(id=inscription_id)
+        return InscriptionVolontaireRepository.actifs().select_for_update(of=("self",)).get(id=inscription_id)
 
     @staticmethod
     def get_par_code_suivi(code_suivi):
@@ -311,7 +311,7 @@ class ImmergeRepository:
 
     @staticmethod
     def get_by_id_pour_update(immerge_id):
-        return ImmergeRepository.actifs().select_for_update().get(id=immerge_id)
+        return ImmergeRepository.actifs().select_for_update(of=("self",)).get(id=immerge_id)
 
     @staticmethod
     def get_par_code(code_fasoim):
