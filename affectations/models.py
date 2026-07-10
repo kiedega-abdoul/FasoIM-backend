@@ -187,7 +187,9 @@ class AffectationRegionale(models.Model):
     """
 
     class Statut(models.TextChoices):
+        PROPOSEE = "PROPOSEE", "Proposée"
         ACTIVE = "ACTIVE", "Active"
+        REJETEE = "REJETEE", "Rejetée"
         ANNULEE = "ANNULEE", "Annulée"
         TRANSFEREE = "TRANSFEREE", "Transférée"
 
@@ -238,8 +240,11 @@ class AffectationRegionale(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["immerge"],
-                condition=models.Q(statut="ACTIVE", deleted_at__isnull=True),
-                name="unique_affectation_regionale_active_par_immerge",
+                condition=models.Q(
+                    statut__in=["PROPOSEE", "ACTIVE"],
+                    deleted_at__isnull=True,
+                ),
+                name="unique_affectation_regionale_ouverte_par_immerge",
             ),
         ]
 
@@ -249,6 +254,17 @@ class AffectationRegionale(models.Model):
     @property
     def est_active(self):
         return self.deleted_at is None and self.statut == self.Statut.ACTIVE
+
+    @property
+    def est_proposee(self):
+        return self.deleted_at is None and self.statut == self.Statut.PROPOSEE
+
+    @property
+    def est_ouverte(self):
+        return self.deleted_at is None and self.statut in {
+            self.Statut.PROPOSEE,
+            self.Statut.ACTIVE,
+        }
 
     def clean(self):
         """Vérifie que la session correspond à celle de l'immergé."""
@@ -263,6 +279,49 @@ class AffectationRegionale(models.Model):
 
         if erreurs:
             raise ValidationError(erreurs)
+
+    def valider(self, valide_par=None, motif: str = ""):
+        """Transforme une proposition régionale en affectation active."""
+
+        if self.statut == self.Statut.ACTIVE and self.deleted_at is None:
+            return self
+
+        if self.statut != self.Statut.PROPOSEE or self.deleted_at is not None:
+            raise ValidationError(
+                "Seule une proposition régionale ouverte peut être validée."
+            )
+
+        self.statut = self.Statut.ACTIVE
+        self.affecte_par = valide_par or self.affecte_par
+        self.date_affectation = timezone.now()
+        self.motif = motif or self.motif
+        self.full_clean()
+        self.save(
+            update_fields=[
+                "statut",
+                "affecte_par",
+                "date_affectation",
+                "motif",
+                "updated_at",
+            ]
+        )
+        return self
+
+    def rejeter(self, motif: str = ""):
+        """Rejette une proposition sans la supprimer de l'historique."""
+
+        if self.statut == self.Statut.REJETEE and self.deleted_at is None:
+            return self
+
+        if self.statut != self.Statut.PROPOSEE or self.deleted_at is not None:
+            raise ValidationError(
+                "Seule une proposition régionale ouverte peut être rejetée."
+            )
+
+        self.statut = self.Statut.REJETEE
+        self.motif = motif or self.motif
+        self.save(update_fields=["statut", "motif", "updated_at"])
+        return self
 
     def annuler(self, motif: str = ""):
         """Annule l'affectation régionale sans supprimer physiquement la ligne."""
@@ -296,7 +355,9 @@ class AffectationCentre(models.Model):
     """
 
     class Statut(models.TextChoices):
+        PROPOSEE = "PROPOSEE", "Proposée"
         ACTIVE = "ACTIVE", "Active"
+        REJETEE = "REJETEE", "Rejetée"
         ANNULEE = "ANNULEE", "Annulée"
         TRANSFEREE = "TRANSFEREE", "Transférée"
 
@@ -352,8 +413,11 @@ class AffectationCentre(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["immerge"],
-                condition=models.Q(statut="ACTIVE", deleted_at__isnull=True),
-                name="unique_affectation_centre_active_par_immerge",
+                condition=models.Q(
+                    statut__in=["PROPOSEE", "ACTIVE"],
+                    deleted_at__isnull=True,
+                ),
+                name="unique_affectation_centre_ouverte_par_immerge",
             ),
         ]
 
@@ -363,6 +427,17 @@ class AffectationCentre(models.Model):
     @property
     def est_active(self):
         return self.deleted_at is None and self.statut == self.Statut.ACTIVE
+
+    @property
+    def est_proposee(self):
+        return self.deleted_at is None and self.statut == self.Statut.PROPOSEE
+
+    @property
+    def est_ouverte(self):
+        return self.deleted_at is None and self.statut in {
+            self.Statut.PROPOSEE,
+            self.Statut.ACTIVE,
+        }
 
     def clean(self):
         """Vérifie la cohérence entre l'immergé, la session, la région et le centre."""
@@ -391,6 +466,49 @@ class AffectationCentre(models.Model):
 
         if erreurs:
             raise ValidationError(erreurs)
+
+    def valider(self, valide_par=None, motif: str = ""):
+        """Transforme une proposition de centre en affectation active."""
+
+        if self.statut == self.Statut.ACTIVE and self.deleted_at is None:
+            return self
+
+        if self.statut != self.Statut.PROPOSEE or self.deleted_at is not None:
+            raise ValidationError(
+                "Seule une proposition de centre ouverte peut être validée."
+            )
+
+        self.statut = self.Statut.ACTIVE
+        self.affecte_par = valide_par or self.affecte_par
+        self.date_affectation = timezone.now()
+        self.motif = motif or self.motif
+        self.full_clean()
+        self.save(
+            update_fields=[
+                "statut",
+                "affecte_par",
+                "date_affectation",
+                "motif",
+                "updated_at",
+            ]
+        )
+        return self
+
+    def rejeter(self, motif: str = ""):
+        """Rejette une proposition de centre sans la supprimer de l'historique."""
+
+        if self.statut == self.Statut.REJETEE and self.deleted_at is None:
+            return self
+
+        if self.statut != self.Statut.PROPOSEE or self.deleted_at is not None:
+            raise ValidationError(
+                "Seule une proposition de centre ouverte peut être rejetée."
+            )
+
+        self.statut = self.Statut.REJETEE
+        self.motif = motif or self.motif
+        self.save(update_fields=["statut", "motif", "updated_at"])
+        return self
 
     def annuler(self, motif: str = ""):
         """Annule l'affectation centre sans supprimer physiquement la ligne."""
