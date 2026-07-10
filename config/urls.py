@@ -23,6 +23,7 @@ urlpatterns = [
     path("api/sessions/", include("sessions_app.urls")),
     path("api/accounts/", include("accounts.urls")),
     path("api/imports/", include("imports_app.urls")),
+    path("api/immerges/", include("immerges.urls")),
 
     # Auth JWT
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),

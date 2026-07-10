@@ -123,6 +123,43 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("corriger_ligne_import", "Corriger une ligne d'import", "imports_app", "Corriger ou revalider une ligne d'import."),
     PermissionDefinition("ignorer_ligne_import", "Ignorer une ligne d'import", "imports_app", "Ignorer une ligne d'import."),
     PermissionDefinition("consulter_erreurs_import", "Consulter les erreurs d'import", "imports_app", "Consulter les erreurs détectées dans un import."),
+
+    # Immerges - sources
+    PermissionDefinition("lister_sources_immerges", "Lister les sources d'immergés", "immerges", "Lister les sources examens, concours et sélectionnés."),
+    PermissionDefinition("consulter_source_immerge", "Consulter une source d'immergé", "immerges", "Consulter une source importée."),
+    PermissionDefinition("creer_source_immerge", "Créer une source d'immergé", "immerges", "Créer manuellement une source d'immergé."),
+    PermissionDefinition("modifier_source_immerge", "Modifier une source d'immergé", "immerges", "Modifier une source d'immergé."),
+    PermissionDefinition("supprimer_source_immerge", "Supprimer une source d'immergé", "immerges", "Supprimer logiquement une source d'immergé."),
+    PermissionDefinition("centraliser_source_immerge", "Centraliser une source d'immergé", "immerges", "Créer l'immergé central depuis une source."),
+    PermissionDefinition("centraliser_sources_importees", "Centraliser des sources importées", "immerges", "Centraliser en lot des sources importées validées."),
+
+    # Immerges - volontaires
+    PermissionDefinition("creer_inscription_volontaire", "Créer une inscription volontaire", "immerges", "Créer une demande volontaire."),
+    PermissionDefinition("lister_inscriptions_volontaires", "Lister les inscriptions volontaires", "immerges", "Lister les demandes volontaires."),
+    PermissionDefinition("consulter_inscription_volontaire", "Consulter une inscription volontaire", "immerges", "Consulter une demande volontaire."),
+    PermissionDefinition("modifier_inscription_volontaire", "Modifier une inscription volontaire", "immerges", "Modifier une demande volontaire."),
+    PermissionDefinition("accepter_inscription_volontaire", "Accepter une inscription volontaire", "immerges", "Accepter une demande volontaire."),
+    PermissionDefinition("refuser_inscription_volontaire", "Refuser une inscription volontaire", "immerges", "Refuser une demande volontaire."),
+    PermissionDefinition("annuler_inscription_volontaire", "Annuler une inscription volontaire", "immerges", "Annuler une demande volontaire."),
+    PermissionDefinition("supprimer_inscription_volontaire", "Supprimer une inscription volontaire", "immerges", "Supprimer logiquement une demande volontaire."),
+    PermissionDefinition("accepter_inscriptions_volontaires_lot", "Accepter des volontaires en lot", "immerges", "Accepter plusieurs inscriptions volontaires."),
+    PermissionDefinition("centraliser_volontaires_acceptes", "Centraliser les volontaires acceptés", "immerges", "Créer les immergés centraux des volontaires acceptés."),
+
+    # Immerges - table centrale
+    PermissionDefinition("lister_immerges", "Lister les immergés", "immerges", "Lister les immergés centraux."),
+    PermissionDefinition("consulter_immerge", "Consulter un immergé", "immerges", "Consulter un immergé central."),
+    PermissionDefinition("centraliser_immerge", "Centraliser un immergé", "immerges", "Créer une ligne centrale Immerge."),
+    PermissionDefinition("modifier_immerge", "Modifier un immergé", "immerges", "Modifier les champs autorisés d'un immergé central."),
+    PermissionDefinition("changer_statut_immerge", "Changer le statut d'un immergé", "immerges", "Changer le statut d'un immergé."),
+    PermissionDefinition("changer_statut_immerges_lot", "Changer le statut en lot", "immerges", "Changer le statut de plusieurs immergés."),
+    PermissionDefinition("generer_code_immerge", "Générer le code d'un immergé", "immerges", "Générer le code FasoIM d'un immergé."),
+    PermissionDefinition("generer_codes_immerges", "Générer les codes des immergés", "immerges", "Générer les codes FasoIM manquants."),
+    PermissionDefinition("regenerer_qr_immerges", "Régénérer les QR des immergés", "immerges", "Régénérer les contenus QR des immergés."),
+    PermissionDefinition("supprimer_immerge", "Supprimer un immergé", "immerges", "Supprimer logiquement un immergé."),
+    PermissionDefinition("supprimer_immerges_session", "Supprimer les immergés d'une session", "immerges", "Supprimer logiquement les immergés d'une session."),
+    PermissionDefinition("consulter_progression_immerges", "Consulter la progression immerges", "immerges", "Consulter la progression des tâches immergés."),
+    PermissionDefinition("consulter_statistiques_immerges", "Consulter les statistiques immergés", "immerges", "Consulter les statistiques des immergés."),
+    PermissionDefinition("confirmer_import_vers_immerges", "Confirmer un import vers immergés", "immerges", "Confirmer un import officiel vers le module immergés."),
 ]
 
 
