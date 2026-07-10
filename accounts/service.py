@@ -785,15 +785,48 @@ class ControleAccesService(ServiceBase):
         affectations = AffectationActeurRepository.lister_actives_par_acteur(acteur)
         if affectation is not None:
             affectations = affectations.filter(id=ControleAccesService.identifiant(affectation))
-        if session_id is not None:
-            affectations = affectations.filter(session_id=session_id)
-        if region_code:
-            affectations = affectations.filter(region_code__iexact=region_code)
-        if centre_id is not None:
-            affectations = affectations.filter(centre_id=centre_id)
 
         for affectation_active in affectations:
+            if not ControleAccesService.affectation_couvre_perimetre(
+                affectation_active,
+                session_id=session_id,
+                region_code=region_code,
+                centre_id=centre_id,
+            ):
+                continue
+
             if ControleAccesRepository.acteur_a_permission(acteur, affectation_active, code_permission):
                 return ResultatControleAcces(True, affectation=affectation_active)
 
         return ResultatControleAcces(False, "Permission absente ou hors périmètre.")
+
+    @staticmethod
+    def affectation_couvre_perimetre(affectation, *, session_id=None, region_code=None, centre_id=None):
+        """Vérifie si une affectation active couvre le périmètre demandé.
+
+        Une affectation plateforme ou nationale couvre les sessions sans devoir
+        stocker une ligne par session. Une affectation de session couvre seulement
+        sa session. Les affectations régionales et centre restent limitées à leur
+        région ou centre.
+        """
+        niveau = affectation.niveau_affectation
+
+        if niveau in (
+            AffectationActeur.NiveauAffectation.PLATEFORME,
+            AffectationActeur.NiveauAffectation.NATIONAL,
+        ):
+            return True
+
+        if session_id is not None and affectation.session_id not in (None, int(session_id)):
+            return False
+
+        if niveau == AffectationActeur.NiveauAffectation.SESSION:
+            return session_id is not None and affectation.session_id == int(session_id)
+
+        if niveau == AffectationActeur.NiveauAffectation.REGION:
+            return bool(region_code and affectation.region_code.lower() == str(region_code).lower())
+
+        if niveau == AffectationActeur.NiveauAffectation.CENTRE:
+            return centre_id is not None and affectation.centre_id == int(centre_id)
+
+        return False

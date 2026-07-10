@@ -4,6 +4,8 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from accounts.models import AffectationActeur, AffectationRole, Permission, Role, RolePermission
+
 from .models import ParametreSession, SessionImmersion
 from .service import SessionImmersionService
 
@@ -25,7 +27,9 @@ class SessionImmersionAPITests(APITestCase):
             email="admin.sessions@example.com",
             password="pass-admin-123",
             is_staff=True,
+            is_superuser=True,
         )
+        self.preparer_droits_sessions(self.utilisateur)
         self.client.force_authenticate(user=self.utilisateur)
 
     @staticmethod
@@ -46,6 +50,53 @@ class SessionImmersionAPITests(APITestCase):
             donnees[username_field] = identifiant
 
         return User.objects.create_user(password=password, **donnees)
+
+
+    @staticmethod
+    def preparer_droits_sessions(utilisateur):
+        """Donne à un acteur de test les droits nécessaires sur sessions_app."""
+        role, _ = Role.objects.get_or_create(
+            code="TEST_SESSIONS",
+            defaults={
+                "libelle": "Test sessions",
+                "description": "Rôle utilisé uniquement par les tests du module sessions_app.",
+                "niveau": 10,
+                "perimetre_autorise": Role.Perimetre.NATIONAL,
+                "est_systeme": False,
+                "est_modifiable": True,
+            },
+        )
+
+        codes_permissions = [
+            "lister_sessions",
+            "consulter_session",
+            "creer_session",
+            "modifier_session",
+            "archiver_session",
+            "modifier_parametres_session",
+        ]
+        for code in codes_permissions:
+            permission, _ = Permission.objects.get_or_create(
+                code=code,
+                defaults={
+                    "libelle": code.replace("_", " ").capitalize(),
+                    "module": "sessions_app",
+                    "description": "Permission créée pour les tests sessions_app.",
+                    "est_systeme": True,
+                },
+            )
+            RolePermission.objects.get_or_create(
+                role=role,
+                permission=permission,
+                defaults={"est_delegable": True, "perimetre_delegation_max": Role.Perimetre.NATIONAL},
+            )
+
+        affectation, _ = AffectationActeur.objects.get_or_create(
+            acteur=utilisateur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.NATIONAL,
+            defaults={"statut": AffectationActeur.Statut.ACTIVE},
+        )
+        AffectationRole.objects.get_or_create(affectation_acteur=affectation, role=role)
 
     @staticmethod
     def extraire_liste(reponse):
