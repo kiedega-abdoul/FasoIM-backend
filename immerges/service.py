@@ -367,3 +367,227 @@ class ImmergeService:
         immerge.deleted_at = timezone.now()
         immerge.save(update_fields=champs_update)
         return immerge
+
+class ImportVersImmergeService:
+    """Pont métier entre imports_app et immerges.
+
+    imports_app lit et valide les fichiers. Cette classe transforme ensuite les
+    lignes valides en sources métier, puis crée la ligne centrale Immerge avec
+    code FasoIM et contenu QR.
+    """
+
+    CHAMPS_COMMUNS_SOURCE = (
+        "nom",
+        "prenoms",
+        "nom_et_prenoms",
+        "sexe",
+        "date_naissance",
+        "lieu_naissance",
+        "nationalite",
+        "numero_cnib",
+        "telephone",
+        "email",
+        "contact_urgence",
+        "nom_contact_urgence",
+    )
+    CHAMPS_EXAMEN = CHAMPS_COMMUNS_SOURCE + (
+        "numero_pv",
+        "type_examen",
+        "serie",
+        "annee_obtention",
+        "statut",
+        "centre_examen",
+        "etablissement_origine",
+        "region_examen",
+        "province_examen",
+    )
+    CHAMPS_CONCOURS = CHAMPS_COMMUNS_SOURCE + (
+        "numero_recepisse",
+        "specialite",
+        "centre_composition",
+        "region_composition",
+        "province_composition",
+    )
+    CHAMPS_SELECTIONNE = CHAMPS_COMMUNS_SOURCE + (
+        "matricule",
+        "reference_selection",
+        "structure_origine",
+        "motif_selection",
+        "region_structure",
+        "province_structure",
+    )
+    CHAMPS_VOLONTAIRE = CHAMPS_COMMUNS_SOURCE + (
+        "code_suivi",
+        "region_residence",
+        "province_residence",
+        "commune_residence",
+        "adresse_residence",
+        "niveau_etude",
+        "profession",
+        "motivation",
+    )
+
+    @staticmethod
+    def _donnees_ligne(ligne):
+        donnees = dict(ligne.donnees_normalisees or {})
+        if not donnees:
+            donnees = dict(ligne.donnees_brutes or {})
+        return donnees
+
+    @staticmethod
+    def _extraire(donnees, champs):
+        return {champ: donnees.get(champ) for champ in champs if champ in donnees}
+
+    @staticmethod
+    def _base_source(import_officiel, ligne, donnees):
+        return {
+            "import_officiel": import_officiel,
+            "numero_ligne_import": ligne.numero_ligne,
+            "donnees_brutes": ligne.donnees_brutes or {},
+            "donnees_normalisees": donnees,
+        }
+
+    @staticmethod
+    def _creer_depuis_examen(import_officiel, ligne):
+        donnees = ImportVersImmergeService._donnees_ligne(ligne)
+        payload = ImportVersImmergeService._base_source(import_officiel, ligne, donnees)
+        payload.update(ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_EXAMEN))
+
+        type_source = str(import_officiel.type_source or "").upper()
+        type_examen = str(payload.get("type_examen") or type_source or ImmergeExamen.TypeExamen.AUTRE).upper()
+        if type_examen not in {ImmergeExamen.TypeExamen.BEPC, ImmergeExamen.TypeExamen.BAC, ImmergeExamen.TypeExamen.AUTRE}:
+            type_examen = ImmergeExamen.TypeExamen.AUTRE
+        payload["type_examen"] = type_examen
+        payload["statut_validation"] = ImmergeExamen.StatutValidation.VALIDE
+
+        source = ImmergeExamenService.creer(**payload)
+        return source, ImmergeService.creer_depuis_examen(source)
+
+    @staticmethod
+    def _creer_depuis_concours(import_officiel, ligne):
+        donnees = ImportVersImmergeService._donnees_ligne(ligne)
+        payload = ImportVersImmergeService._base_source(import_officiel, ligne, donnees)
+        payload.update(ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_CONCOURS))
+        payload["statut_validation"] = ImmergeConcours.StatutValidation.VALIDE
+
+        source = ImmergeConcoursService.creer(**payload)
+        return source, ImmergeService.creer_depuis_concours(source)
+
+    @staticmethod
+    def _creer_depuis_selectionne(import_officiel, ligne):
+        donnees = ImportVersImmergeService._donnees_ligne(ligne)
+        payload = ImportVersImmergeService._base_source(import_officiel, ligne, donnees)
+        payload.update(ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_SELECTIONNE))
+        payload["statut_validation"] = ImmergeSelectionne.StatutValidation.VALIDE
+
+        source = ImmergeSelectionneService.creer(**payload)
+        return source, ImmergeService.creer_depuis_selectionne(source)
+
+    @staticmethod
+    def _creer_depuis_volontaire(import_officiel, ligne, *, confirme_par=None):
+        donnees = ImportVersImmergeService._donnees_ligne(ligne)
+        payload = ImportVersImmergeService._extraire(donnees, ImportVersImmergeService.CHAMPS_VOLONTAIRE)
+        payload.update(
+            {
+                "session": import_officiel.session,
+                "statut_demande": InscriptionVolontaire.StatutDemande.ACCEPTEE,
+                "date_decision": timezone.now(),
+                "motif_decision": "Volontaire accepté par import officiel confirmé.",
+                "donnees_brutes": ligne.donnees_brutes or {},
+            }
+        )
+
+        source = InscriptionVolontaireService.creer(**payload)
+        return source, ImmergeService.creer_depuis_volontaire(source)
+
+    @staticmethod
+    def _creer_source_et_immerge(import_officiel, ligne, *, confirme_par=None):
+        from imports_app.models import ImportOfficiel
+
+        type_source = import_officiel.type_source
+        if type_source in {ImportOfficiel.TypeSource.BEPC, ImportOfficiel.TypeSource.BAC}:
+            return ImportVersImmergeService._creer_depuis_examen(import_officiel, ligne)
+        if type_source == ImportOfficiel.TypeSource.CONCOURS:
+            return ImportVersImmergeService._creer_depuis_concours(import_officiel, ligne)
+        if type_source == ImportOfficiel.TypeSource.SELECTIONNES:
+            return ImportVersImmergeService._creer_depuis_selectionne(import_officiel, ligne)
+        if type_source == ImportOfficiel.TypeSource.VOLONTAIRES_ACCEPTES:
+            return ImportVersImmergeService._creer_depuis_volontaire(import_officiel, ligne, confirme_par=confirme_par)
+        raise ValidationMetierErreur({"type_source": "Type de source non pris en charge pour la confirmation."})
+
+    @staticmethod
+    @transaction.atomic
+    def confirmer_import(import_id, *, confirme_par=None):
+        from imports_app.models import ImportOfficiel, LigneImport
+        from imports_app.repository import ImportOfficielRepository, LigneImportRepository
+
+        import_officiel = ImportOfficielRepository.get_by_id_pour_update(import_id)
+        if not import_officiel:
+            raise ValidationMetierErreur({"import": "Import officiel introuvable."})
+        if not import_officiel.peut_etre_confirme:
+            raise ValidationMetierErreur({"statut": "Cet import n'est pas prêt pour la confirmation."})
+
+        lignes_valides = list(
+            LigneImportRepository.lister_valides(import_officiel)
+            .select_for_update()
+            .order_by("numero_ligne")
+        )
+        if not lignes_valides:
+            raise ValidationMetierErreur({"lignes": "Aucune ligne valide à confirmer."})
+
+        import_officiel.statut = ImportOfficiel.Statut.CONFIRMATION_EN_COURS
+        import_officiel.date_confirmation = timezone.now()
+        import_officiel.confirme_par = confirme_par
+        import_officiel.message_erreur = ""
+        import_officiel.save(update_fields=["statut", "date_confirmation", "confirme_par", "message_erreur", "updated_at"])
+
+        total_importees = 0
+        total_erreurs = 0
+        lignes_a_mettre_a_jour = []
+
+        for ligne in lignes_valides:
+            try:
+                _, immerge = ImportVersImmergeService._creer_source_et_immerge(
+                    import_officiel,
+                    ligne,
+                    confirme_par=confirme_par,
+                )
+                ligne.statut = LigneImport.Statut.IMPORTEE
+                ligne.message_statut = f"Importée dans FasoIM avec le code {immerge.code_fasoim}."
+                total_importees += 1
+            except ValidationError as erreur:
+                ligne.statut = LigneImport.Statut.ERREUR
+                ligne.message_statut = str(erreur.message_dict if hasattr(erreur, "message_dict") else erreur.messages)
+                total_erreurs += 1
+            ligne.updated_at = timezone.now()
+            lignes_a_mettre_a_jour.append(ligne)
+
+        LigneImportRepository.mettre_a_jour_en_masse(
+            lignes_a_mettre_a_jour,
+            ["statut", "message_statut", "updated_at"],
+        )
+        ImportOfficielRepository.mettre_a_jour_statistiques(import_officiel)
+        import_officiel = ImportOfficielRepository.get_by_id_pour_update(import_id)
+
+        if total_erreurs:
+            import_officiel.statut = ImportOfficiel.Statut.VALIDE_AVEC_ERREURS
+            import_officiel.message_erreur = f"Confirmation partielle : {total_importees} ligne(s) importée(s), {total_erreurs} ligne(s) en erreur."
+            champs = ["statut", "message_erreur", "updated_at"]
+        else:
+            import_officiel.statut = ImportOfficiel.Statut.TERMINE
+            import_officiel.message_erreur = ""
+            import_officiel.date_fin_traitement = timezone.now()
+            champs = ["statut", "message_erreur", "date_fin_traitement", "updated_at"]
+
+        import_officiel.confirme_par = confirme_par
+        if not import_officiel.date_confirmation:
+            import_officiel.date_confirmation = timezone.now()
+        import_officiel.save(update_fields=[*champs, "confirme_par", "date_confirmation"])
+
+        return {
+            "import_officiel": import_officiel,
+            "lignes_traitees": len(lignes_valides),
+            "lignes_importees": total_importees,
+            "lignes_erreur": total_erreurs,
+        }
+

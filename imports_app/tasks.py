@@ -184,11 +184,11 @@ def valider_lignes_import_task(self, import_id):
 
 @shared_task(bind=True, name="imports_app.tasks.confirmer_import_task")
 def confirmer_import_task(self, import_id, confirme_par_id=None):
-    """Préparation de la confirmation finale d'un import.
+    """Confirmation finale d'un import vers les tables immerges.
 
-    La création réelle des tables sources et des immergés centraux sera branchée
-    quand le module immerges sera disponible. Cette tâche existe déjà pour fixer
-    le contrat asynchrone côté API/frontend.
+    Cette tâche transforme les lignes valides en sources métier
+    ImmergeExamen/ImmergeConcours/ImmergeSelectionne/InscriptionVolontaire,
+    puis crée la ligne centrale Immerge avec code FasoIM et QR textuel.
     """
 
     operation = "confirmation_import"
@@ -201,25 +201,46 @@ def confirmer_import_task(self, import_id, confirme_par_id=None):
                 "message": "Confirmation déjà en cours pour cet import.",
             }
 
-        import_officiel = ImportOfficielRepository.get_by_id(import_id)
-        if not import_officiel:
-            raise ValidationError({"import": "Import officiel introuvable."})
-        if not import_officiel.peut_etre_confirme:
-            raise ValidationError({"statut": "Cet import n'est pas prêt pour la confirmation."})
+        try:
+            ProgressionImportService.definir(
+                import_id,
+                operation=operation,
+                pourcentage=10,
+                message="Confirmation de l'import vers les immergés...",
+            )
 
-        ProgressionImportService.definir(
-            import_id,
-            operation=operation,
-            pourcentage=20,
-            message="Confirmation en attente du module immerges.",
-        )
-        return {
-            "ok": False,
-            "import_id": import_id,
-            "operation": operation,
-            "statut": import_officiel.statut,
-            "message": "La confirmation finale sera branchée après la création du module immerges.",
-        }
+            confirme_par = None
+            if confirme_par_id:
+                from django.contrib.auth import get_user_model
+
+                confirme_par = get_user_model().objects.filter(id=confirme_par_id).first()
+
+            from immerges.service import ImportVersImmergeService
+
+            resultat = ImportVersImmergeService.confirmer_import(
+                import_id,
+                confirme_par=confirme_par,
+            )
+
+            ProgressionImportService.terminer(
+                import_id,
+                operation=operation,
+                message="Confirmation terminée.",
+            )
+            import_officiel = resultat["import_officiel"]
+            return {
+                "ok": resultat["lignes_erreur"] == 0,
+                "import_id": import_id,
+                "operation": operation,
+                "statut": import_officiel.statut,
+                "lignes_traitees": resultat["lignes_traitees"],
+                "lignes_importees": resultat["lignes_importees"],
+                "lignes_erreur": resultat["lignes_erreur"],
+            }
+        except Exception as erreur:
+            message = _message_exception(erreur)
+            ProgressionImportService.echouer(import_id, operation=operation, message=message)
+            raise
 
 
 @shared_task(bind=True, name="imports_app.tasks.supprimer_import_logiquement_task")
