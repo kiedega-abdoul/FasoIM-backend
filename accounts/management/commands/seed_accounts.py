@@ -102,6 +102,27 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("modifier_parametres_session", "Modifier les paramètres d'une session", "sessions_app", "Modifier les paramètres d'une session."),
     PermissionDefinition("consulter_historique_sessions", "Consulter l'historique des sessions", "sessions_app", "Consulter les sessions supprimées ou archivées."),
     PermissionDefinition("consulter_historique_parametres_session", "Consulter l'historique des paramètres", "sessions_app", "Consulter l'historique des paramètres de session."),
+
+    # Imports
+    PermissionDefinition("creer_import_officiel", "Créer un import officiel", "imports_app", "Créer un import officiel pour une session."),
+    PermissionDefinition("lister_imports_officiels", "Lister les imports officiels", "imports_app", "Lister les imports officiels selon les droits."),
+    PermissionDefinition("consulter_import_officiel", "Consulter un import officiel", "imports_app", "Consulter le détail d'un import officiel."),
+    PermissionDefinition("modifier_import_officiel", "Modifier un import officiel", "imports_app", "Modifier les informations autorisées d'un import officiel."),
+    PermissionDefinition("supprimer_import_officiel", "Supprimer un import officiel", "imports_app", "Supprimer logiquement un import officiel."),
+
+    PermissionDefinition("consulter_champs_attendus_import", "Consulter les champs attendus", "imports_app", "Consulter les champs attendus selon le type d'import."),
+    PermissionDefinition("relancer_lecture_import", "Relancer la lecture d'un import", "imports_app", "Relancer la lecture des colonnes d'un fichier importé."),
+    PermissionDefinition("valider_correspondance_import", "Valider la correspondance d'un import", "imports_app", "Valider la correspondance entre colonnes source et champs FasoIM."),
+    PermissionDefinition("valider_lignes_import", "Valider les lignes d'un import", "imports_app", "Lancer ou relancer la validation des lignes d'un import."),
+    PermissionDefinition("confirmer_import_officiel", "Confirmer un import officiel", "imports_app", "Confirmer l'import final après validation."),
+    PermissionDefinition("annuler_import_officiel", "Annuler un import officiel", "imports_app", "Annuler un import officiel."),
+    PermissionDefinition("consulter_progression_import", "Consulter la progression d'un import", "imports_app", "Consulter la progression du traitement d'un import."),
+
+    PermissionDefinition("consulter_correspondances_import", "Consulter les correspondances d'import", "imports_app", "Consulter les correspondances de colonnes d'un import."),
+    PermissionDefinition("consulter_lignes_import", "Consulter les lignes d'import", "imports_app", "Consulter les lignes lues dans un import."),
+    PermissionDefinition("corriger_ligne_import", "Corriger une ligne d'import", "imports_app", "Corriger ou revalider une ligne d'import."),
+    PermissionDefinition("ignorer_ligne_import", "Ignorer une ligne d'import", "imports_app", "Ignorer une ligne d'import."),
+    PermissionDefinition("consulter_erreurs_import", "Consulter les erreurs d'import", "imports_app", "Consulter les erreurs détectées dans un import."),
 ]
 
 
