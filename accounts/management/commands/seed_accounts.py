@@ -234,6 +234,26 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("liberer_lit", "Libérer un lit", "organisation", "Libérer un lit en conservant l'historique de son attribution."),
     PermissionDefinition("consulter_hebergement", "Consulter l'hébergement", "organisation", "Consulter les dortoirs, lits et attributions selon le périmètre autorisé."),
 
+    # Santé - visites médicales
+    PermissionDefinition("consulter_visites_medicales", "Consulter les visites médicales", "sante", "Consulter les résultats et informations médicales selon le périmètre autorisé."),
+    PermissionDefinition("saisir_resultat_visite_medicale", "Saisir un résultat médical", "sante", "Créer un brouillon ou enregistrer et valider une visite médicale."),
+    PermissionDefinition("corriger_resultat_visite_medicale", "Corriger un résultat médical", "sante", "Créer une contre-visite en conservant l'historique médical."),
+    PermissionDefinition("appliquer_resultat_visite_medicale", "Appliquer un résultat médical", "sante", "Appliquer ou réappliquer les conséquences d'une visite validée."),
+    PermissionDefinition("annuler_visite_medicale", "Annuler une visite médicale", "sante", "Annuler logiquement une visite médicale en conservant l'historique."),
+    PermissionDefinition("consulter_candidats_visite_medicale", "Consulter les candidats à la visite", "sante", "Consulter les immergés du centre restant à examiner."),
+    PermissionDefinition("consulter_statistiques_sante", "Consulter les statistiques de santé", "sante", "Consulter les synthèses de visites médicales selon le périmètre."),
+
+    # Santé - restrictions médicales
+    PermissionDefinition("consulter_restrictions_medicales", "Consulter les restrictions médicales", "sante", "Consulter les restrictions médicales selon le périmètre autorisé."),
+    PermissionDefinition("enregistrer_restriction_medicale", "Enregistrer une restriction médicale", "sante", "Ajouter une restriction et ses consignes opérationnelles à une visite."),
+    PermissionDefinition("modifier_restriction_medicale", "Modifier une restriction médicale", "sante", "Modifier une restriction appartenant à une visite non validée."),
+    PermissionDefinition("annuler_restriction_medicale", "Annuler une restriction médicale", "sante", "Annuler logiquement une restriction médicale."),
+    PermissionDefinition("lever_restriction_medicale", "Lever une restriction médicale", "sante", "Clôturer une restriction médicale devenue sans objet."),
+
+    # Santé - impacts opérationnels
+    PermissionDefinition("consulter_impacts_medicaux", "Consulter les impacts médicaux", "sante", "Consulter uniquement les décisions et consignes opérationnelles utiles aux autres modules."),
+
+
 ]
 
 
