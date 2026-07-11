@@ -24,6 +24,7 @@ urlpatterns = [
     path("api/accounts/", include("accounts.urls")),
     path("api/imports/", include("imports_app.urls")),
     path("api/immerges/", include("immerges.urls")),
+    path("api/affectations/", include("affectations.urls")),
 
     # Auth JWT
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
