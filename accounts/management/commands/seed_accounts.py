@@ -254,6 +254,29 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("consulter_impacts_medicaux", "Consulter les impacts médicaux", "sante", "Consulter uniquement les décisions et consignes opérationnelles utiles aux autres modules."),
 
 
+    # Kits - articles
+    PermissionDefinition("consulter_articles_kit", "Consulter les articles de kit", "kits", "Consulter les articles à apporter et à remettre selon le périmètre."),
+    PermissionDefinition("creer_article_kit_a_remettre", "Créer un article à remettre", "kits", "Créer au niveau DGAS un article que le centre doit remettre aux immergés."),
+    PermissionDefinition("creer_article_kit_a_apporter", "Créer un article à apporter", "kits", "Créer au niveau du centre un article que les immergés doivent apporter."),
+    PermissionDefinition("modifier_article_kit", "Modifier un article de kit", "kits", "Modifier un article de kit dans le périmètre autorisé."),
+    PermissionDefinition("desactiver_article_kit", "Désactiver un article de kit", "kits", "Désactiver un article sans supprimer son historique."),
+    PermissionDefinition("reactiver_article_kit", "Réactiver un article de kit", "kits", "Réactiver un article de kit précédemment désactivé."),
+    PermissionDefinition("supprimer_article_kit", "Supprimer un article de kit", "kits", "Supprimer logiquement un article de kit."),
+
+    # Kits - remises
+    PermissionDefinition("consulter_remises_kit", "Consulter les remises de kits", "kits", "Consulter les remises individuelles selon le périmètre."),
+    PermissionDefinition("enregistrer_remise_kit", "Enregistrer une remise de kit", "kits", "Préparer, enregistrer ou valider la remise individuelle d'un kit."),
+    PermissionDefinition("annuler_remise_kit", "Annuler une remise de kit", "kits", "Annuler logiquement une remise individuelle."),
+    PermissionDefinition("consulter_statistiques_kits", "Consulter les statistiques de kits", "kits", "Consulter les statistiques de distribution des kits."),
+
+    # Kits - opérations massives
+    PermissionDefinition("preparer_remises_kit_masse", "Préparer les remises en masse", "kits", "Préparer avec Celery les lignes de remise pour plusieurs immergés."),
+    PermissionDefinition("valider_remises_kit_masse", "Valider les remises en masse", "kits", "Valider avec Celery les remises de plusieurs immergés."),
+    PermissionDefinition("annuler_remises_kit_masse", "Annuler les remises en masse", "kits", "Annuler logiquement un lot de remises avec Celery."),
+    PermissionDefinition("consulter_progression_kits", "Consulter la progression des kits", "kits", "Consulter dans Redis la progression d'une opération massive de kits."),
+
+
+
 ]
 
 
