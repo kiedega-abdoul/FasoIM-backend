@@ -11,19 +11,15 @@ from django.utils import timezone
 
 
 class ModuleActivite(models.Model):
-    """
-    Catalogue réutilisable des activités FasoIM.
-
-    Le module n'appartient pas à une session. Il peut donc être réutilisé
-    dans plusieurs sessions, y compris après la clôture d'une session.
-    """
+    """Catalogue réutilisable des activités FasoIM."""
 
     class Categorie(models.TextChoices):
         FORMATION = "FORMATION", "Formation"
-        SPORT = "SPORT", "Sport"
         SENSIBILISATION = "SENSIBILISATION", "Sensibilisation"
-        ORIENTATION = "ORIENTATION", "Orientation"
+        SPORT = "SPORT", "Sport"
+        CIVISME = "CIVISME", "Civisme"
         DISCIPLINE = "DISCIPLINE", "Discipline"
+        ORIENTATION = "ORIENTATION", "Orientation"
         CULTURE = "CULTURE", "Culture"
         AUTRE = "AUTRE", "Autre"
 
@@ -33,19 +29,19 @@ class ModuleActivite(models.Model):
 
     titre = models.CharField(max_length=180)
     code = models.CharField(max_length=60)
+    description = models.TextField(blank=True)
     categorie = models.CharField(
         max_length=30,
         choices=Categorie.choices,
         db_index=True,
     )
-    description = models.TextField(blank=True)
-    obligatoire = models.BooleanField(
-        default=True,
-        help_text=(
-            "Valeur par défaut utilisée lors de la planification "
-            "dans une session."
-        ),
+    duree_prevue = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text="Durée indicative de l'activité en minutes.",
     )
+    ordre = models.PositiveIntegerField(default=0)
     statut = models.CharField(
         max_length=20,
         choices=Statut.choices,
@@ -65,11 +61,15 @@ class ModuleActivite(models.Model):
         db_table = "modules_activite"
         verbose_name = "Module d'activité"
         verbose_name_plural = "Modules d'activité"
-        ordering = ["categorie", "titre", "id"]
+        ordering = ["ordre", "categorie", "titre", "id"]
         indexes = [
             models.Index(
                 fields=["categorie", "statut"],
                 name="act_mod_cat_stat",
+            ),
+            models.Index(
+                fields=["ordre", "statut"],
+                name="act_mod_ordre_stat",
             ),
             models.Index(
                 fields=["deleted_at", "statut"],
@@ -111,6 +111,14 @@ class ModuleActivite(models.Model):
 
         if not self.code:
             erreurs["code"] = "Le code du module est obligatoire."
+
+        if (
+            self.duree_prevue is not None
+            and self.duree_prevue < 1
+        ):
+            erreurs["duree_prevue"] = (
+                "La durée prévue doit être supérieure à zéro."
+            )
 
         if erreurs:
             raise ValidationError(erreurs)
@@ -167,7 +175,14 @@ class Seance(models.Model):
         PLANIFIEE = "PLANIFIEE", "Planifiée"
         EN_COURS = "EN_COURS", "En cours"
         TERMINEE = "TERMINEE", "Terminée"
+        REPORTEE = "REPORTEE", "Reportée"
         ANNULEE = "ANNULEE", "Annulée"
+
+    class StatutFeuillePresence(models.TextChoices):
+        NON_OUVERTE = "NON_OUVERTE", "Non ouverte"
+        OUVERTE = "OUVERTE", "Ouverte"
+        VALIDEE = "VALIDEE", "Validée"
+        CLOTUREE = "CLOTUREE", "Clôturée"
 
     module_activite = models.ForeignKey(
         ModuleActivite,
@@ -206,6 +221,11 @@ class Seance(models.Model):
         related_name="seances_animees",
     )
 
+    titre = models.CharField(
+        max_length=180,
+        blank=True,
+        default="",
+    )
     date_seance = models.DateField(db_index=True)
     heure_debut = models.TimeField()
     heure_fin = models.TimeField()
@@ -217,6 +237,32 @@ class Seance(models.Model):
         db_index=True,
     )
     observations = models.TextField(blank=True)
+
+    statut_feuille_presence = models.CharField(
+        max_length=20,
+        choices=StatutFeuillePresence.choices,
+        default=StatutFeuillePresence.NON_OUVERTE,
+        db_index=True,
+    )
+    date_ouverture_presence = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    date_validation_presence = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    date_cloture_presence = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    presences_validees_par = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="feuilles_presence_validees",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -258,17 +304,24 @@ class Seance(models.Model):
                 fields=["section", "date_seance"],
                 name="act_sea_sec_date",
             ),
+            models.Index(
+                fields=["statut_feuille_presence", "date_seance"],
+                name="act_sea_feuille_date",
+            ),
         ]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(heure_fin__gt=models.F("heure_debut")),
+                condition=models.Q(
+                    heure_fin__gt=models.F("heure_debut")
+                ),
                 name="act_seance_heure_fin_apres_debut",
             ),
         ]
 
     def __str__(self):
+        titre = self.titre or self.module_activite.titre
         return (
-            f"{self.module_activite.titre} - "
+            f"{titre} - "
             f"{self.date_seance} {self.heure_debut}"
         )
 
@@ -287,9 +340,17 @@ class Seance(models.Model):
             return "SECTION"
         return "CENTRE"
 
+    @property
+    def feuille_presence_modifiable(self):
+        return self.statut_feuille_presence in {
+            self.StatutFeuillePresence.NON_OUVERTE,
+            self.StatutFeuillePresence.OUVERTE,
+        }
+
     def clean(self):
         erreurs = {}
 
+        self.titre = (self.titre or "").strip()
         self.lieu = (self.lieu or "").strip()
         self.observations = (self.observations or "").strip()
 
@@ -358,12 +419,48 @@ class Seance(models.Model):
                     "sélectionnée."
                 )
 
+        if (
+            self.date_validation_presence
+            and not self.date_ouverture_presence
+        ):
+            erreurs["date_validation_presence"] = (
+                "La feuille doit être ouverte avant sa validation."
+            )
+
+        if (
+            self.date_cloture_presence
+            and not self.date_validation_presence
+        ):
+            erreurs["date_cloture_presence"] = (
+                "La feuille doit être validée avant sa clôture."
+            )
+
+        if (
+            self.date_ouverture_presence
+            and self.date_validation_presence
+            and self.date_validation_presence
+            < self.date_ouverture_presence
+        ):
+            erreurs["date_validation_presence"] = (
+                "La validation ne peut pas précéder l'ouverture."
+            )
+
+        if (
+            self.date_validation_presence
+            and self.date_cloture_presence
+            and self.date_cloture_presence
+            < self.date_validation_presence
+        ):
+            erreurs["date_cloture_presence"] = (
+                "La clôture ne peut pas précéder la validation."
+            )
+
         if erreurs:
             raise ValidationError(erreurs)
 
     def save(self, *args, **kwargs):
-        if self.groupe_id and not self.section_id:
-            self.section = self.groupe.section
+        if not (self.titre or "").strip() and self.module_activite_id:
+            self.titre = self.module_activite.titre
 
         self.full_clean()
         super().save(*args, **kwargs)
@@ -417,12 +514,16 @@ class Presence(models.Model):
         choices=StatutPresence.choices,
         db_index=True,
     )
-    heure_pointage = models.TimeField(null=True, blank=True)
+    heure_arrivee = models.TimeField(null=True, blank=True)
     observations = models.TextField(blank=True)
     saisie_par = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="presences_activite_saisies",
+    )
+    date_saisie = models.DateTimeField(
+        default=timezone.now,
+        db_index=True,
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -449,6 +550,10 @@ class Presence(models.Model):
                     "statut_presence",
                 ],
                 name="act_pre_aff_stat",
+            ),
+            models.Index(
+                fields=["date_saisie"],
+                name="act_pre_date_saisie",
             ),
         ]
         constraints = [
@@ -527,14 +632,15 @@ class Presence(models.Model):
 
 
 class Evaluation(models.Model):
-    """Évaluation planifiée pour un module d'activité."""
+    """Évaluation planifiée dans une session et un centre."""
 
     class TypeEvaluation(models.TextChoices):
         QUIZ = "QUIZ", "Quiz"
         TEST = "TEST", "Test"
         PRATIQUE = "PRATIQUE", "Pratique"
-        PARTICIPATION = "PARTICIPATION", "Participation"
         COMPORTEMENT = "COMPORTEMENT", "Comportement"
+        PARTICIPATION = "PARTICIPATION", "Participation"
+        FINALE = "FINALE", "Finale"
         AUTRE = "AUTRE", "Autre"
 
     class Statut(models.TextChoices):
@@ -543,11 +649,6 @@ class Evaluation(models.Model):
         CLOTUREE = "CLOTUREE", "Clôturée"
         ANNULEE = "ANNULEE", "Annulée"
 
-    module_activite = models.ForeignKey(
-        ModuleActivite,
-        on_delete=models.PROTECT,
-        related_name="evaluations",
-    )
     session = models.ForeignKey(
         "sessions_app.SessionImmersion",
         on_delete=models.PROTECT,
@@ -577,12 +678,25 @@ class Evaluation(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0.01"))],
     )
+    coefficient = models.DecimalField(
+        max_digits=7,
+        decimal_places=2,
+        default=Decimal("1.00"),
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
     date_evaluation = models.DateTimeField(db_index=True)
     statut = models.CharField(
         max_length=20,
         choices=Statut.choices,
         default=Statut.BROUILLON,
         db_index=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="evaluations_activite_creees",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -609,14 +723,18 @@ class Evaluation(models.Model):
                 name="act_eval_sess_ctr_dt",
             ),
             models.Index(
-                fields=["module_activite", "statut"],
-                name="act_eval_mod_stat",
+                fields=["type_evaluation", "statut"],
+                name="act_eval_type_stat",
             ),
         ]
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(bareme__gt=0),
                 name="act_eval_bareme_gt_zero",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(coefficient__gt=0),
+                name="act_eval_coef_gt_zero",
             ),
         ]
 
@@ -628,6 +746,14 @@ class Evaluation(models.Model):
         return (
             self.deleted_at is None
             and self.statut != self.Statut.ANNULEE
+        )
+
+    @property
+    def module_activite(self):
+        return (
+            self.seance.module_activite
+            if self.seance_id
+            else None
         )
 
     def clean(self):
@@ -645,9 +771,9 @@ class Evaluation(models.Model):
                 "Le barème doit être strictement positif."
             )
 
-        if self.module_activite_id and not self.module_activite.est_actif:
-            erreurs["module_activite"] = (
-                "Le module d'activité doit être actif."
+        if self.coefficient is not None and self.coefficient <= 0:
+            erreurs["coefficient"] = (
+                "Le coefficient doit être strictement positif."
             )
 
         if self.session_id and self.deleted_at is None:
@@ -666,11 +792,6 @@ class Evaluation(models.Model):
                 )
 
         if self.seance_id:
-            if self.seance.module_activite_id != self.module_activite_id:
-                erreurs["seance"] = (
-                    "La séance et l'évaluation doivent utiliser "
-                    "le même module d'activité."
-                )
             if self.seance.session_id != self.session_id:
                 erreurs["seance"] = (
                     "La séance et l'évaluation doivent appartenir "
@@ -714,13 +835,15 @@ class Evaluation(models.Model):
 
 
 class Note(models.Model):
-    """Note ou dispense d'un immergé pour une évaluation."""
+    """Résultat d'un immergé pour une évaluation."""
 
-    class Statut(models.TextChoices):
-        SAISIE = "SAISIE", "Saisie"
-        VALIDEE = "VALIDEE", "Validée"
-        ANNULEE = "ANNULEE", "Annulée"
+    class StatutNote(models.TextChoices):
+        NOTEE = "NOTEE", "Notée"
+        ABSENT = "ABSENT", "Absent"
         DISPENSE = "DISPENSE", "Dispensée"
+        ANNULEE = "ANNULEE", "Annulée"
+
+    Statut = StatutNote
 
     evaluation = models.ForeignKey(
         Evaluation,
@@ -738,10 +861,11 @@ class Note(models.Model):
         null=True,
         blank=True,
     )
-    statut = models.CharField(
+    appreciation = models.TextField(blank=True)
+    statut_note = models.CharField(
         max_length=20,
-        choices=Statut.choices,
-        default=Statut.SAISIE,
+        choices=StatutNote.choices,
+        default=StatutNote.NOTEE,
         db_index=True,
     )
     observations = models.TextField(blank=True)
@@ -749,6 +873,10 @@ class Note(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="notes_activite_saisies",
+    )
+    date_saisie = models.DateTimeField(
+        default=timezone.now,
+        db_index=True,
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -766,12 +894,16 @@ class Note(models.Model):
         ordering = ["evaluation_id", "affectation_centre_id"]
         indexes = [
             models.Index(
-                fields=["evaluation", "statut"],
+                fields=["evaluation", "statut_note"],
                 name="act_note_eval_stat",
             ),
             models.Index(
-                fields=["affectation_centre", "statut"],
+                fields=["affectation_centre", "statut_note"],
                 name="act_note_aff_stat",
+            ),
+            models.Index(
+                fields=["date_saisie"],
+                name="act_note_date_saisie",
             ),
         ]
         constraints = [
@@ -783,17 +915,15 @@ class Note(models.Model):
             models.CheckConstraint(
                 condition=(
                     models.Q(
-                        statut="DISPENSE",
-                        valeur__isnull=True,
-                    )
-                    | models.Q(
-                        statut="ANNULEE",
-                    )
-                    | models.Q(
-                        statut__in=["SAISIE", "VALIDEE"],
+                        statut_note="NOTEE",
                         valeur__isnull=False,
                         valeur__gte=0,
                     )
+                    | models.Q(
+                        statut_note__in=["ABSENT", "DISPENSE"],
+                        valeur__isnull=True,
+                    )
+                    | models.Q(statut_note="ANNULEE")
                 ),
                 name="act_note_statut_valeur_ok",
             ),
@@ -803,7 +933,7 @@ class Note(models.Model):
         valeur = (
             self.valeur
             if self.valeur is not None
-            else self.get_statut_display()
+            else self.get_statut_note_display()
         )
         return (
             f"{self.affectation_centre.immerge.code_fasoim} - "
@@ -814,9 +944,14 @@ class Note(models.Model):
     def est_active(self):
         return self.deleted_at is None
 
+    @property
+    def est_notee(self):
+        return self.statut_note == self.StatutNote.NOTEE
+
     def clean(self):
         erreurs = {}
 
+        self.appreciation = (self.appreciation or "").strip()
         self.observations = (self.observations or "").strip()
 
         if self.evaluation_id and self.affectation_centre_id:
@@ -837,19 +972,20 @@ class Note(models.Model):
                     "appartenir au même centre."
                 )
 
-        if self.statut == self.Statut.DISPENSE:
+        if self.statut_note in {
+            self.StatutNote.ABSENT,
+            self.StatutNote.DISPENSE,
+        }:
             if self.valeur is not None:
                 erreurs["valeur"] = (
-                    "Une dispense ne doit contenir aucune note."
+                    "Une absence ou une dispense ne doit contenir "
+                    "aucune note."
                 )
 
-        elif self.statut in {
-            self.Statut.SAISIE,
-            self.Statut.VALIDEE,
-        }:
+        elif self.statut_note == self.StatutNote.NOTEE:
             if self.valeur is None:
                 erreurs["valeur"] = (
-                    "Une note saisie ou validée doit avoir une valeur."
+                    "Le statut NOTÉE exige une valeur."
                 )
             elif self.evaluation_id:
                 if self.valeur < 0:
@@ -868,28 +1004,44 @@ class Note(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-    def valider(self):
-        if self.statut == self.Statut.DISPENSE:
-            return self
+    def marquer_absent(self):
+        self.valeur = None
+        self.statut_note = self.StatutNote.ABSENT
+        self.save(
+            update_fields=[
+                "valeur",
+                "statut_note",
+                "updated_at",
+            ]
+        )
+        return self
 
-        self.statut = self.Statut.VALIDEE
-        self.save(update_fields=["statut", "updated_at"])
+    def marquer_dispense(self):
+        self.valeur = None
+        self.statut_note = self.StatutNote.DISPENSE
+        self.save(
+            update_fields=[
+                "valeur",
+                "statut_note",
+                "updated_at",
+            ]
+        )
         return self
 
     def annuler(self):
-        self.statut = self.Statut.ANNULEE
-        self.save(update_fields=["statut", "updated_at"])
+        self.statut_note = self.StatutNote.ANNULEE
+        self.save(update_fields=["statut_note", "updated_at"])
         return self
 
     def supprimer_logiquement(self):
         if self.deleted_at is not None:
             return self
 
-        self.statut = self.Statut.ANNULEE
+        self.statut_note = self.StatutNote.ANNULEE
         self.deleted_at = timezone.now()
         self.save(
             update_fields=[
-                "statut",
+                "statut_note",
                 "deleted_at",
                 "updated_at",
             ]
