@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from .models import (
@@ -796,12 +798,12 @@ class EvaluationCreateSerializer(serializers.Serializer):
     bareme = serializers.DecimalField(
         max_digits=7,
         decimal_places=2,
-        min_value=0.01,
+        min_value=Decimal("0.01"),
     )
     coefficient = serializers.DecimalField(
         max_digits=7,
         decimal_places=2,
-        min_value=0.01,
+        min_value=Decimal("0.01"),
         default="1.00",
     )
     date_evaluation = serializers.DateTimeField()
@@ -835,13 +837,13 @@ class EvaluationUpdateSerializer(serializers.Serializer):
     bareme = serializers.DecimalField(
         max_digits=7,
         decimal_places=2,
-        min_value=0.01,
+        min_value=Decimal("0.01"),
         required=False,
     )
     coefficient = serializers.DecimalField(
         max_digits=7,
         decimal_places=2,
-        min_value=0.01,
+        min_value=Decimal("0.01"),
         required=False,
     )
     date_evaluation = serializers.DateTimeField(
