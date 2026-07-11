@@ -194,6 +194,46 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("valider_affectation_centre", "Valider une affectation centre", "affectations", "Valider une ou plusieurs propositions de centres."),
     PermissionDefinition("verifier_compatibilite_centre", "Vérifier la compatibilité centre", "affectations", "Vérifier la compatibilité d'un immergé avec un centre."),
     PermissionDefinition("consulter_affectations_centres", "Consulter les affectations centres", "affectations", "Consulter les propositions et affectations centres selon le périmètre."),
+
+    # Organisation - règles du centre
+    PermissionDefinition("configurer_regles_centre", "Configurer les règles du centre", "organisation", "Définir les règles locales d'organisation d'un centre pour une session."),
+    PermissionDefinition("modifier_regles_centre", "Modifier les règles du centre", "organisation", "Modifier les règles locales d'organisation d'un centre."),
+    PermissionDefinition("consulter_regles_centre", "Consulter les règles du centre", "organisation", "Consulter les règles et l'état d'organisation d'un centre."),
+    PermissionDefinition("generer_sections_groupes", "Générer les sections et groupes", "organisation", "Lancer la génération automatique des sections et groupes selon les règles du centre."),
+    PermissionDefinition("valider_organisation_interne", "Valider l'organisation interne", "organisation", "Valider l'organisation interne complète d'un centre."),
+    PermissionDefinition("marquer_centre_pret_publication", "Marquer le centre prêt pour publication", "organisation", "Déclarer l'organisation du centre prête à être publiée."),
+
+    # Organisation - sections
+    PermissionDefinition("creer_section", "Créer une section", "organisation", "Créer manuellement une section dans un centre."),
+    PermissionDefinition("modifier_section", "Modifier une section", "organisation", "Modifier une section existante."),
+    PermissionDefinition("supprimer_section", "Supprimer une section", "organisation", "Archiver logiquement une section vide."),
+
+    # Organisation - groupes
+    PermissionDefinition("creer_groupe", "Créer un groupe", "organisation", "Créer manuellement un groupe dans une section."),
+    PermissionDefinition("modifier_groupe", "Modifier un groupe", "organisation", "Modifier un groupe existant."),
+    PermissionDefinition("supprimer_groupe", "Supprimer un groupe", "organisation", "Archiver logiquement un groupe vide."),
+    PermissionDefinition("affecter_immerge_groupe", "Affecter un immergé à un groupe", "organisation", "Affecter manuellement ou en lot un immergé à un groupe."),
+    PermissionDefinition("retirer_immerge_groupe", "Retirer un immergé d'un groupe", "organisation", "Retirer un immergé de son groupe en conservant l'historique."),
+
+    # Organisation - dortoirs
+    PermissionDefinition("creer_dortoir", "Créer un dortoir", "organisation", "Créer un dortoir dans un centre."),
+    PermissionDefinition("modifier_dortoir", "Modifier un dortoir", "organisation", "Modifier les informations d'un dortoir."),
+    PermissionDefinition("desactiver_dortoir", "Désactiver un dortoir", "organisation", "Archiver logiquement un dortoir vide."),
+    PermissionDefinition("mettre_dortoir_hors_service", "Mettre un dortoir hors service", "organisation", "Suspendre l'utilisation d'un dortoir."),
+
+    # Organisation - lits
+    PermissionDefinition("creer_lit", "Créer un lit", "organisation", "Créer un lit dans un dortoir."),
+    PermissionDefinition("modifier_lit", "Modifier un lit", "organisation", "Modifier les informations d'un lit."),
+    PermissionDefinition("mettre_lit_hors_service", "Mettre un lit hors service", "organisation", "Suspendre l'utilisation d'un lit."),
+    PermissionDefinition("reactiver_lit", "Réactiver un lit", "organisation", "Réactiver un lit hors service."),
+
+    # Organisation - hébergement
+    PermissionDefinition("proposer_attribution_lit", "Proposer une attribution de lit", "organisation", "Lancer la proposition automatique des attributions de lits."),
+    PermissionDefinition("attribuer_lit", "Attribuer un lit", "organisation", "Attribuer manuellement ou valider une proposition de lit."),
+    PermissionDefinition("modifier_attribution_lit", "Modifier une attribution de lit", "organisation", "Modifier ou rejeter une attribution de lit."),
+    PermissionDefinition("liberer_lit", "Libérer un lit", "organisation", "Libérer un lit en conservant l'historique de son attribution."),
+    PermissionDefinition("consulter_hebergement", "Consulter l'hébergement", "organisation", "Consulter les dortoirs, lits et attributions selon le périmètre autorisé."),
+
 ]
 
 
