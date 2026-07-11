@@ -20,15 +20,15 @@ class SuppressionPhysiqueInterditeAdmin(admin.ModelAdmin):
 class ModuleActiviteAdmin(SuppressionPhysiqueInterditeAdmin):
     list_display = (
         "id",
+        "ordre",
         "code",
         "titre",
         "categorie",
-        "obligatoire",
+        "duree_affichee",
         "statut",
     )
     list_filter = (
         "categorie",
-        "obligatoire",
         "statut",
     )
     search_fields = (
@@ -37,6 +37,7 @@ class ModuleActiviteAdmin(SuppressionPhysiqueInterditeAdmin):
         "description",
     )
     ordering = (
+        "ordre",
         "categorie",
         "titre",
     )
@@ -52,9 +53,10 @@ class ModuleActiviteAdmin(SuppressionPhysiqueInterditeAdmin):
                 "fields": (
                     "code",
                     "titre",
-                    "categorie",
                     "description",
-                    "obligatoire",
+                    "categorie",
+                    "duree_prevue",
+                    "ordre",
                     "statut",
                 )
             },
@@ -72,11 +74,18 @@ class ModuleActiviteAdmin(SuppressionPhysiqueInterditeAdmin):
         ),
     )
 
+    @admin.display(description="Durée prévue")
+    def duree_affichee(self, obj):
+        if obj.duree_prevue is None:
+            return "Non définie"
+        return f"{obj.duree_prevue} min"
+
 
 @admin.register(Seance)
 class SeanceAdmin(SuppressionPhysiqueInterditeAdmin):
     list_display = (
         "id",
+        "titre",
         "module_activite",
         "session",
         "centre",
@@ -85,15 +94,18 @@ class SeanceAdmin(SuppressionPhysiqueInterditeAdmin):
         "horaire",
         "formateur",
         "statut",
+        "statut_feuille_presence",
     )
     list_filter = (
         "statut",
+        "statut_feuille_presence",
         "date_seance",
         "module_activite__categorie",
         "session",
         "centre",
     )
     search_fields = (
+        "titre",
         "module_activite__code",
         "module_activite__titre",
         "session__code",
@@ -120,6 +132,7 @@ class SeanceAdmin(SuppressionPhysiqueInterditeAdmin):
         "section",
         "groupe",
         "formateur",
+        "presences_validees_par",
     )
     list_select_related = (
         "module_activite",
@@ -128,8 +141,13 @@ class SeanceAdmin(SuppressionPhysiqueInterditeAdmin):
         "section",
         "groupe",
         "formateur",
+        "presences_validees_par",
     )
     readonly_fields = (
+        "date_ouverture_presence",
+        "date_validation_presence",
+        "date_cloture_presence",
+        "presences_validees_par",
         "created_at",
         "updated_at",
         "deleted_at",
@@ -149,15 +167,28 @@ class SeanceAdmin(SuppressionPhysiqueInterditeAdmin):
             },
         ),
         (
-            "Date et lieu",
+            "Séance",
             {
                 "fields": (
+                    "titre",
                     "date_seance",
                     "heure_debut",
                     "heure_fin",
                     "lieu",
                     "statut",
                     "observations",
+                )
+            },
+        ),
+        (
+            "Feuille de présence",
+            {
+                "fields": (
+                    "statut_feuille_presence",
+                    "date_ouverture_presence",
+                    "date_validation_presence",
+                    "date_cloture_presence",
+                    "presences_validees_par",
                 )
             },
         ),
@@ -194,17 +225,20 @@ class PresenceAdmin(SuppressionPhysiqueInterditeAdmin):
         "code_fasoim",
         "seance",
         "statut_presence",
-        "heure_pointage",
+        "heure_arrivee",
+        "date_saisie",
         "saisie_par",
     )
     list_filter = (
         "statut_presence",
+        "date_saisie",
         "seance__date_seance",
         "seance__session",
         "seance__centre",
     )
     search_fields = (
         "affectation_centre__immerge__code_fasoim",
+        "seance__titre",
         "seance__module_activite__code",
         "seance__module_activite__titre",
         "observations",
@@ -215,6 +249,7 @@ class PresenceAdmin(SuppressionPhysiqueInterditeAdmin):
         "-seance__date_seance",
         "affectation_centre__immerge__code_fasoim",
     )
+    date_hierarchy = "date_saisie"
     raw_id_fields = (
         "seance",
         "affectation_centre",
@@ -243,13 +278,15 @@ class EvaluationAdmin(SuppressionPhysiqueInterditeAdmin):
     list_display = (
         "id",
         "titre",
-        "module_activite",
+        "module_lie",
         "session",
         "centre",
         "type_evaluation",
         "bareme",
+        "coefficient",
         "date_evaluation",
         "statut",
+        "created_by",
     )
     list_filter = (
         "type_evaluation",
@@ -260,32 +297,42 @@ class EvaluationAdmin(SuppressionPhysiqueInterditeAdmin):
     )
     search_fields = (
         "titre",
-        "module_activite__code",
-        "module_activite__titre",
+        "seance__titre",
+        "seance__module_activite__code",
+        "seance__module_activite__titre",
         "session__code",
         "session__nom",
         "centre__code",
         "centre__nom",
+        "created_by__username",
+        "created_by__email",
     )
     ordering = ("-date_evaluation",)
     date_hierarchy = "date_evaluation"
     raw_id_fields = (
-        "module_activite",
         "session",
         "centre",
         "seance",
+        "created_by",
     )
     list_select_related = (
-        "module_activite",
         "session",
         "centre",
         "seance",
+        "seance__module_activite",
+        "created_by",
     )
     readonly_fields = (
         "created_at",
         "updated_at",
         "deleted_at",
     )
+
+    @admin.display(description="Module lié")
+    def module_lie(self, obj):
+        if not obj.seance_id:
+            return "Évaluation indépendante"
+        return obj.seance.module_activite.titre
 
 
 @admin.register(Note)
@@ -295,11 +342,13 @@ class NoteAdmin(SuppressionPhysiqueInterditeAdmin):
         "code_fasoim",
         "evaluation",
         "valeur",
-        "statut",
+        "statut_note",
+        "date_saisie",
         "saisie_par",
     )
     list_filter = (
-        "statut",
+        "statut_note",
+        "date_saisie",
         "evaluation__type_evaluation",
         "evaluation__session",
         "evaluation__centre",
@@ -307,8 +356,9 @@ class NoteAdmin(SuppressionPhysiqueInterditeAdmin):
     search_fields = (
         "affectation_centre__immerge__code_fasoim",
         "evaluation__titre",
-        "evaluation__module_activite__code",
-        "evaluation__module_activite__titre",
+        "evaluation__seance__module_activite__code",
+        "evaluation__seance__module_activite__titre",
+        "appreciation",
         "observations",
         "saisie_par__username",
         "saisie_par__email",
@@ -317,6 +367,7 @@ class NoteAdmin(SuppressionPhysiqueInterditeAdmin):
         "-evaluation__date_evaluation",
         "affectation_centre__immerge__code_fasoim",
     )
+    date_hierarchy = "date_saisie"
     raw_id_fields = (
         "evaluation",
         "affectation_centre",
@@ -324,7 +375,8 @@ class NoteAdmin(SuppressionPhysiqueInterditeAdmin):
     )
     list_select_related = (
         "evaluation",
-        "evaluation__module_activite",
+        "evaluation__seance",
+        "evaluation__seance__module_activite",
         "affectation_centre",
         "affectation_centre__immerge",
         "saisie_par",
