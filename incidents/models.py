@@ -62,6 +62,11 @@ class AlerteIncident(models.Model):
         CLOTURE = "CLOTURE", "Clôturé"
         ANNULE = "ANNULE", "Annulé"
 
+    class Confidentialite(models.TextChoices):
+        NORMALE = "NORMALE", "Normale"
+        RESTREINTE = "RESTREINTE", "Restreinte"
+        MEDICALE = "MEDICALE", "Médicale"
+
     STATUTS_OUVERTS = (
         Statut.NOUVEAU,
         Statut.EN_COURS,
@@ -70,6 +75,13 @@ class AlerteIncident(models.Model):
 
     session = models.ForeignKey(
         "sessions_app.SessionImmersion",
+        on_delete=models.PROTECT,
+        related_name="alertes_incidents",
+        null=True,
+        blank=True,
+    )
+    region = models.ForeignKey(
+        "affectations.RegionImmersion",
         on_delete=models.PROTECT,
         related_name="alertes_incidents",
         null=True,
@@ -136,6 +148,12 @@ class AlerteIncident(models.Model):
         default=Statut.NOUVEAU,
         db_index=True,
     )
+    niveau_confidentialite = models.CharField(
+        max_length=20,
+        choices=Confidentialite.choices,
+        default=Confidentialite.NORMALE,
+        db_index=True,
+    )
 
     code_detection = models.CharField(max_length=100, blank=True, db_index=True)
     module_source = models.CharField(max_length=80, blank=True, db_index=True)
@@ -186,6 +204,7 @@ class AlerteIncident(models.Model):
         ordering = ["-date_signalement", "-id"]
         indexes = [
             models.Index(fields=["session", "centre", "statut"], name="inc_ses_ctr_stat_idx"),
+            models.Index(fields=["session", "region", "statut"], name="inc_ses_reg_stat_idx"),
             models.Index(fields=["categorie", "niveau_gravite", "statut"], name="inc_cat_grav_stat_idx"),
             models.Index(fields=["origine", "module_source", "statut"], name="inc_org_mod_stat_idx"),
             models.Index(fields=["cree_par", "date_signalement"], name="inc_createur_date_idx"),
@@ -223,11 +242,16 @@ class AlerteIncident(models.Model):
     def clean(self):
         erreurs = {}
 
+        if self.centre_id and self.region_id and self.centre.region_id != self.region_id:
+            erreurs["region"] = "La région doit correspondre à celle du centre."
+
         if self.affectation_centre_id:
             if self.session_id and self.affectation_centre.session_id != self.session_id:
                 erreurs["session"] = "La session doit correspondre à l'affectation centre."
             if self.centre_id and self.affectation_centre.centre_id != self.centre_id:
                 erreurs["centre"] = "Le centre doit correspondre à l'affectation centre."
+            if self.region_id and self.affectation_centre.centre.region_id != self.region_id:
+                erreurs["region"] = "La région doit correspondre à celle de l'affectation centre."
 
         if self.origine == self.Origine.MANUELLE:
             if not self.cree_par_id:
@@ -243,6 +267,10 @@ class AlerteIncident(models.Model):
                 erreurs["type_concerne"] = "Un élément concerné est obligatoire."
             if len((self.description or "").strip()) < 10:
                 erreurs["description"] = "La raison doit contenir au moins 10 caractères."
+            if self.niveau_confidentialite == self.Confidentialite.NORMALE:
+                erreurs["niveau_confidentialite"] = (
+                    "Un signalement manuel doit être au minimum restreint."
+                )
 
         if self.est_automatique and not self.cle_deduplication:
             erreurs["cle_deduplication"] = (
@@ -262,6 +290,4 @@ class AlerteIncident(models.Model):
             self.statut = self.Statut.ANNULE
             champs.append("statut")
         self.save(update_fields=champs)
-        return self
-        self.save(update_fields=["deleted_at", "statut", "updated_at"])
         return self

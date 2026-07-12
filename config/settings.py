@@ -165,9 +165,19 @@ DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="FasoIM <noreply@fasoi
 # Surveillance automatique des alertes et incidents
 # Celery Beat doit être lancé séparément. Les tâches restent sans effet sur les
 # validations métier : elles observent uniquement l'état persistant du système.
-INCIDENTS_MAX_ANOMALIES_PAR_REGLE = config(
-    "INCIDENTS_MAX_ANOMALIES_PAR_REGLE",
+INCIDENTS_TAILLE_LOT_SCAN = config(
+    "INCIDENTS_TAILLE_LOT_SCAN",
     default=500,
+    cast=int,
+)
+INCIDENTS_MAX_ALERTES_CREEES_PAR_REGLE = config(
+    "INCIDENTS_MAX_ALERTES_CREEES_PAR_REGLE",
+    default=500,
+    cast=int,
+)
+INCIDENTS_SCAN_LOCK_SECONDS = config(
+    "INCIDENTS_SCAN_LOCK_SECONDS",
+    default=CELERY_TASK_TIME_LIMIT + 300,
     cast=int,
 )
 INCIDENTS_SCAN_DEBOUNCE_SECONDS = config(

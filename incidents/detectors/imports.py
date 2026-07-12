@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from imports_app.models import CorrespondanceColonneImport, ErreurImport, ImportOfficiel, LigneImport
@@ -24,13 +24,13 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def detecter():
     maintenant = timezone.now()
-    limite = _limite()
+    taille_lot = _taille_lot()
     statuts_traitement = [
         ImportOfficiel.Statut.LECTURE_COLONNES_EN_COURS,
         ImportOfficiel.Statut.VALIDATION_EN_COURS,
@@ -40,7 +40,7 @@ def detecter():
         statut__in=statuts_traitement,
         updated_at__lt=maintenant - timedelta(minutes=30),
         deleted_at__isnull=True,
-    ).select_related("session")[:limite]
+    ).select_related("session").iterator(chunk_size=taille_lot)
     for dossier in bloques:
         yield Anomalie(
             code="IMP_TRAITEMENT_BLOQUE",
@@ -63,7 +63,7 @@ def detecter():
     for dossier in ImportOfficiel.objects.filter(
         statut=ImportOfficiel.Statut.ECHEC,
         deleted_at__isnull=True,
-    ).select_related("session")[:limite]:
+    ).select_related("session").iterator(chunk_size=taille_lot):
         yield Anomalie(
             code="IMP_ECHEC",
             cle=f"IMP_ECHEC:{dossier.id}",
@@ -83,24 +83,78 @@ def detecter():
             contexte={"nom_fichier": dossier.nom_fichier_original},
         )
 
-    imports_mapping = ImportOfficiel.objects.filter(
-        statut__in=[
-            ImportOfficiel.Statut.CORRESPONDANCE_VALIDEE,
-            ImportOfficiel.Statut.VALIDATION_EN_COURS,
-            ImportOfficiel.Statut.VALIDE,
-            ImportOfficiel.Statut.VALIDE_AVEC_ERREURS,
-            ImportOfficiel.Statut.CONFIRMATION_EN_COURS,
-            ImportOfficiel.Statut.TERMINE,
-        ],
-        deleted_at__isnull=True,
-    )[:limite]
-    for dossier in imports_mapping:
-        incompletes = CorrespondanceColonneImport.objects.filter(
-            import_officiel_id=dossier.id,
-            obligatoire=True,
-            confirmee=False,
+    imports_mapping = (
+        ImportOfficiel.objects.filter(
+            statut__in=[
+                ImportOfficiel.Statut.CORRESPONDANCE_VALIDEE,
+                ImportOfficiel.Statut.VALIDATION_EN_COURS,
+                ImportOfficiel.Statut.VALIDE,
+                ImportOfficiel.Statut.VALIDE_AVEC_ERREURS,
+                ImportOfficiel.Statut.CONFIRMATION_EN_COURS,
+                ImportOfficiel.Statut.TERMINE,
+            ],
             deleted_at__isnull=True,
-        ).count()
+        )
+        .annotate(
+            correspondances_incompletes_calculees=Count(
+                "correspondances",
+                filter=Q(
+                    correspondances__obligatoire=True,
+                    correspondances__confirmee=False,
+                    correspondances__deleted_at__isnull=True,
+                ),
+                distinct=True,
+            ),
+            total_lignes_calcule=Count(
+                "lignes",
+                filter=Q(lignes__deleted_at__isnull=True),
+                distinct=True,
+            ),
+            lignes_valides_calculees=Count(
+                "lignes",
+                filter=Q(
+                    lignes__statut=LigneImport.Statut.VALIDE,
+                    lignes__deleted_at__isnull=True,
+                ),
+                distinct=True,
+            ),
+            lignes_erreur_calculees=Count(
+                "lignes",
+                filter=Q(
+                    lignes__statut=LigneImport.Statut.ERREUR,
+                    lignes__deleted_at__isnull=True,
+                ),
+                distinct=True,
+            ),
+            lignes_ignorees_calculees=Count(
+                "lignes",
+                filter=Q(
+                    lignes__statut=LigneImport.Statut.IGNOREE,
+                    lignes__deleted_at__isnull=True,
+                ),
+                distinct=True,
+            ),
+            lignes_importees_calculees=Count(
+                "lignes",
+                filter=Q(
+                    lignes__statut=LigneImport.Statut.IMPORTEE,
+                    lignes__deleted_at__isnull=True,
+                ),
+                distinct=True,
+            ),
+            erreurs_bloquantes_calculees=Count(
+                "erreurs",
+                filter=Q(
+                    erreurs__gravite=ErreurImport.Gravite.BLOQUANTE,
+                    erreurs__deleted_at__isnull=True,
+                ),
+                distinct=True,
+            ),
+        )
+        .iterator(chunk_size=taille_lot)
+    )
+    for dossier in imports_mapping:
+        incompletes = dossier.correspondances_incompletes_calculees
         if incompletes:
             yield Anomalie(
                 code="IMP_CORRESPONDANCE_INCOMPLETE",
@@ -121,16 +175,12 @@ def detecter():
                 contexte={"correspondances_incompletes": incompletes},
             )
 
-        total_calcule = LigneImport.objects.filter(
-            import_officiel_id=dossier.id,
-            deleted_at__isnull=True,
-        ).count()
+        total_calcule = dossier.total_lignes_calcule
         repartition = {
-            ligne["statut"]: ligne["total"]
-            for ligne in LigneImport.objects.filter(
-                import_officiel_id=dossier.id,
-                deleted_at__isnull=True,
-            ).values("statut").annotate(total=Count("id"))
+            LigneImport.Statut.VALIDE: dossier.lignes_valides_calculees,
+            LigneImport.Statut.ERREUR: dossier.lignes_erreur_calculees,
+            LigneImport.Statut.IGNOREE: dossier.lignes_ignorees_calculees,
+            LigneImport.Statut.IMPORTEE: dossier.lignes_importees_calculees,
         }
         incoherent = (
             dossier.total_lignes != total_calcule
@@ -159,11 +209,7 @@ def detecter():
                 },
             )
 
-        bloquantes = ErreurImport.objects.filter(
-            import_officiel_id=dossier.id,
-            gravite=ErreurImport.Gravite.BLOQUANTE,
-            deleted_at__isnull=True,
-        ).count()
+        bloquantes = dossier.erreurs_bloquantes_calculees
         if bloquantes and dossier.statut in {
             ImportOfficiel.Statut.VALIDE,
             ImportOfficiel.Statut.CONFIRMATION_EN_COURS,
@@ -190,10 +236,14 @@ def detecter():
 
     # La cohérence import/ligne est déjà protégée par le modèle. Le contrôle utile
     # porte ici sur les lignes actives d'un import supprimé logiquement.
-    for ligne in LigneImport.objects.filter(
-        deleted_at__isnull=True,
-        import_officiel__deleted_at__isnull=False,
-    )[:limite]:
+    for ligne in (
+        LigneImport.objects.filter(
+            deleted_at__isnull=True,
+            import_officiel__deleted_at__isnull=False,
+        )
+        .select_related("import_officiel")
+        .iterator(chunk_size=taille_lot)
+    ):
         yield Anomalie(
             code="IMP_LIGNES_ORPHELINES",
             cle=f"IMP_LIGNES_ORPHELINES:{ligne.id}",
@@ -215,7 +265,7 @@ def detecter():
         .exclude(hash_fichier="")
         .values("session_id", "hash_fichier")
         .annotate(total=Count("id"))
-        .filter(total__gt=1)[:limite]
+        .filter(total__gt=1).iterator(chunk_size=taille_lot)
     )
     for ligne in doublons:
         yield Anomalie(

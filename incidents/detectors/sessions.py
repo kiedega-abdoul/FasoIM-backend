@@ -21,8 +21,8 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def detecter():
@@ -34,7 +34,7 @@ def detecter():
             SessionImmersion.Statut.EN_COURS,
         ],
         deleted_at__isnull=True,
-    ).select_related("parametres")[: _limite()]
+    ).select_related("parametres").iterator(chunk_size=_taille_lot())
 
     for session in operationnelles:
         try:
@@ -135,7 +135,7 @@ def detecter():
             SessionImmersion.Statut.EN_COURS,
         ],
         deleted_at__isnull=True,
-    )[: _limite()]
+    ).iterator(chunk_size=_taille_lot())
     for session in terminees_non_terminees:
         yield Anomalie(
             code="SES_STATUT_DATE_INCOHERENT",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, F
+from django.db.models import Count, Exists, F, OuterRef
 from django.utils import timezone
 
 from affectations.models import AffectationCentre, AffectationRegionale, CentreImmersion, RegionImmersion
@@ -25,33 +25,38 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def detecter():
     maintenant = timezone.now()
-    limite = _limite()
+    taille_lot = _taille_lot()
 
-    regionales = AffectationRegionale.objects.filter(
-        statut=AffectationRegionale.Statut.ACTIVE,
+    centre_actif = AffectationCentre.objects.filter(
+        affectation_regionale_id=OuterRef("pk"),
+        statut=AffectationCentre.Statut.ACTIVE,
         deleted_at__isnull=True,
-        session__statut__in=[
-            SessionImmersion.Statut.EN_PREPARATION,
-            SessionImmersion.Statut.EN_COURS,
-        ],
-        session__deleted_at__isnull=True,
-    ).select_related("immerge", "session", "region")[:limite]
-    for regionale in regionales:
-        centre = AffectationCentre.objects.filter(
-            immerge_id=regionale.immerge_id,
-            statut=AffectationCentre.Statut.ACTIVE,
+    )
+    regionales = (
+        AffectationRegionale.objects.filter(
+            statut=AffectationRegionale.Statut.ACTIVE,
             deleted_at__isnull=True,
-        ).select_related("centre__region").first()
+            session__statut__in=[
+                SessionImmersion.Statut.EN_PREPARATION,
+                SessionImmersion.Statut.EN_COURS,
+            ],
+            session__deleted_at__isnull=True,
+        )
+        .annotate(possede_centre_actif=Exists(centre_actif))
+        .select_related("immerge", "session", "region")
+        .iterator(chunk_size=taille_lot)
+    )
+    for regionale in regionales:
         centre_exige = regionale.session.statut == SessionImmersion.Statut.EN_COURS or (
             regionale.session.date_debut <= timezone.localdate() + timedelta(days=3)
         )
-        if centre_exige and not centre:
+        if centre_exige and not regionale.possede_centre_actif:
             yield Anomalie(
                 code="AFF_REGION_ACTIVE_SANS_CENTRE",
                 cle=f"AFF_REGION_ACTIVE_SANS_CENTRE:{regionale.id}",
@@ -74,7 +79,7 @@ def detecter():
     centres = AffectationCentre.objects.filter(
         statut=AffectationCentre.Statut.ACTIVE,
         deleted_at__isnull=True,
-    ).select_related("immerge", "session", "centre__region", "affectation_regionale")[:limite]
+    ).select_related("immerge", "session", "centre__region", "affectation_regionale").iterator(chunk_size=taille_lot)
     for affectation in centres:
         regionale = affectation.affectation_regionale
         if not regionale.est_active:
@@ -140,7 +145,7 @@ def detecter():
         )
         .values("session_id", "centre_id", "centre__nom", "centre__capacite_totale")
         .annotate(effectif=Count("id"))
-        .filter(effectif__gt=F("centre__capacite_totale"))[:limite]
+        .filter(effectif__gt=F("centre__capacite_totale")).iterator(chunk_size=taille_lot)
     )
     for ligne in occupations:
         yield Anomalie(
@@ -169,13 +174,13 @@ def detecter():
             statut=AffectationRegionale.Statut.PROPOSEE,
             date_affectation__lt=seuil,
             deleted_at__isnull=True,
-        ).values("id", "session_id")[:limite]
+        ).values("id", "session_id").iterator(chunk_size=taille_lot)
     ) + list(
         AffectationCentre.objects.filter(
             statut=AffectationCentre.Statut.PROPOSEE,
             date_affectation__lt=seuil,
             deleted_at__isnull=True,
-        ).values("id", "session_id", "centre_id")[:limite]
+        ).values("id", "session_id", "centre_id").iterator(chunk_size=taille_lot)
     )
     for ligne in propositions:
         modele = "AffectationCentre" if ligne.get("centre_id") else "AffectationRegionale"
@@ -198,7 +203,7 @@ def detecter():
         statut=AffectationRegionale.Statut.ACTIVE,
         deleted_at__isnull=True,
         region__statut=RegionImmersion.Statut.DESACTIVEE,
-    ).select_related("region")[:limite]:
+    ).select_related("region").iterator(chunk_size=taille_lot):
         yield Anomalie(
             code="AFF_REGION_DESACTIVEE_UTILISEE",
             cle=f"AFF_REGION_DESACTIVEE_UTILISEE:{affectation.id}",

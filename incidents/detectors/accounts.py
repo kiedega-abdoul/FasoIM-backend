@@ -51,8 +51,8 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def _active_relation_filter(prefix=""):
@@ -121,17 +121,81 @@ def _role_actif(code, *, session_id=None, region_code=None, centre_id=None):
     return qs.exists()
 
 
+def _charger_couvertures_roles(codes):
+    aujourd_hui = timezone.localdate()
+    return tuple(
+        AffectationRole.objects.filter(
+            role__code__in=codes,
+            role__statut=Role.Statut.ACTIF,
+            role__deleted_at__isnull=True,
+            statut=AffectationRole.Statut.ACTIF,
+            deleted_at__isnull=True,
+            date_attribution__lte=aujourd_hui,
+            affectation_acteur__in=_affectations_actives(),
+        )
+        .filter(Q(date_expiration__isnull=True) | Q(date_expiration__gte=aujourd_hui))
+        .values(
+            "role__code",
+            "affectation_acteur__session_id",
+            "affectation_acteur__niveau_affectation",
+            "affectation_acteur__region_code",
+            "affectation_acteur__centre_id",
+        )
+    )
+
+
+def _role_couvre(couvertures, code, *, session_id=None, region_code=None, centre_id=None):
+    region_normalisee = str(region_code or "").lower()
+    for ligne in couvertures:
+        if ligne["role__code"] != code:
+            continue
+        session_affectation = ligne["affectation_acteur__session_id"]
+        if session_id is not None and session_affectation not in {None, session_id}:
+            continue
+        niveau = ligne["affectation_acteur__niveau_affectation"]
+        if centre_id is not None:
+            if niveau in {
+                AffectationActeur.NiveauAffectation.PLATEFORME,
+                AffectationActeur.NiveauAffectation.NATIONAL,
+            }:
+                return True
+            if ligne["affectation_acteur__centre_id"] == centre_id:
+                return True
+            if (
+                niveau == AffectationActeur.NiveauAffectation.REGION
+                and str(ligne["affectation_acteur__region_code"] or "").lower()
+                == region_normalisee
+            ):
+                return True
+            continue
+        if region_code:
+            if niveau in {
+                AffectationActeur.NiveauAffectation.PLATEFORME,
+                AffectationActeur.NiveauAffectation.NATIONAL,
+            }:
+                return True
+            if (
+                niveau == AffectationActeur.NiveauAffectation.REGION
+                and str(ligne["affectation_acteur__region_code"] or "").lower()
+                == region_normalisee
+            ):
+                return True
+            continue
+        return True
+    return False
+
+
 def detecter():
     maintenant = timezone.now()
     aujourd_hui = timezone.localdate()
-    limite = _limite()
+    taille_lot = _taille_lot()
 
     attendues = {definition.code: definition for definition in PERMISSIONS_SYSTEME}
     permissions = {
         permission.code: permission
         for permission in Permission.objects.filter(code__in=attendues.keys())
     }
-    for code, definition in list(attendues.items())[:limite]:
+    for code, definition in attendues.items():
         permission = permissions.get(code)
         if permission is None:
             yield Anomalie(
@@ -233,7 +297,7 @@ def detecter():
         deleted_at__isnull=True,
         is_superuser=False,
         date_joined__lte=seuil_nouveau,
-    ).exclude(id__in=_affectations_actives().values("acteur_id"))[:limite]
+    ).exclude(id__in=_affectations_actives().values("acteur_id")).iterator(chunk_size=taille_lot)
     for acteur in actifs_sans_affectation:
         yield Anomalie(
             code="ACC_ACTEUR_SANS_AFFECTATION",
@@ -257,7 +321,7 @@ def detecter():
         Q(acteur__is_active=False)
         | ~Q(acteur__statut=Acteur.Statut.ACTIF)
         | Q(acteur__deleted_at__isnull=False)
-    ).select_related("acteur")[:limite]
+    ).select_related("acteur").iterator(chunk_size=taille_lot)
     for affectation in affectations_invalides:
         yield Anomalie(
             code="ACC_ACTEUR_INACTIF_AVEC_DROITS",
@@ -286,7 +350,7 @@ def detecter():
         role__permissions_role__deleted_at__isnull=True,
         role__permissions_role__permission__statut=Permission.Statut.ACTIVE,
         role__permissions_role__permission__deleted_at__isnull=True,
-    ).select_related("role", "affectation_acteur")[:limite]
+    ).select_related("role", "affectation_acteur").iterator(chunk_size=taille_lot)
     for affectation_role in roles_sans_permissions:
         affectation = affectation_role.affectation_acteur
         yield Anomalie(
@@ -309,7 +373,7 @@ def detecter():
     for affectation in AffectationActeur.objects.filter(
         statut=AffectationActeur.Statut.ACTIVE,
         deleted_at__isnull=True,
-    ).filter(Q(date_fin__lt=aujourd_hui) | Q(date_debut__gt=aujourd_hui))[:limite]:
+    ).filter(Q(date_fin__lt=aujourd_hui) | Q(date_debut__gt=aujourd_hui)).iterator(chunk_size=taille_lot):
         yield Anomalie(
             code="ACC_AFFECTATION_EXPIREE_ACTIVE",
             cle=f"ACC_AFFECTATION_EXPIREE_ACTIVE:{affectation.id}",
@@ -360,7 +424,7 @@ def detecter():
         ),
     )
     for queryset, code, modele, titre in expirations:
-        for objet in queryset.select_related("affectation_acteur")[:limite]:
+        for objet in queryset.select_related("affectation_acteur").iterator(chunk_size=taille_lot):
             affectation = objet.affectation_acteur
             yield Anomalie(
                 code=code,
@@ -386,7 +450,7 @@ def detecter():
     )
     # Une demande approuvée doit avoir produit une permission directe active.
     # La comparaison se fait explicitement pour rester lisible et portable.
-    for demande in demandes.select_related("affectation_acteur", "permission")[:limite]:
+    for demande in demandes.select_related("affectation_acteur", "permission").iterator(chunk_size=taille_lot):
         existe = AffectationPermission.objects.filter(
             affectation_acteur_id=demande.affectation_acteur_id,
             permission_id=demande.permission_id,
@@ -415,7 +479,7 @@ def detecter():
     delegations = DelegationActeur.objects.filter(
         statut=DelegationActeur.Statut.ACTIVE,
         deleted_at__isnull=True,
-    ).select_related("acteur_source", "acteur_cible", "affectation_acteur")[:limite]
+    ).select_related("acteur_source", "acteur_cible", "affectation_acteur").iterator(chunk_size=taille_lot)
     for delegation in delegations:
         incoherences = []
         if delegation.acteur_source_id == delegation.acteur_cible_id:
@@ -448,6 +512,16 @@ def detecter():
                 origine=AlerteIncident.Origine.SYSTEME_SECURITE,
             )
 
+    couvertures_roles = _charger_couvertures_roles(
+        {
+            "ADMINISTRATEUR",
+            "DGAS",
+            "DIRECTEUR_REGIONAL",
+            "RESPONSABLE_CENTRE",
+            "AGENT_SANTE",
+            "FORMATEUR",
+        }
+    )
     if not (
         Acteur.objects.filter(
             is_superuser=True,
@@ -455,13 +529,16 @@ def detecter():
             statut=Acteur.Statut.ACTIF,
             deleted_at__isnull=True,
         ).exists()
-        or _role_actif("ADMINISTRATEUR")
+        or _role_couvre(couvertures_roles, "ADMINISTRATEUR")
     ):
         yield Anomalie(
             code="ACC_POSTE_ADMIN_VACANT",
             cle="ACC_POSTE_ADMIN_VACANT:PLATEFORME",
             titre="Aucun administrateur actif",
-            description="La plateforme ne possède aucun superutilisateur ni rôle ADMINISTRATEUR actif.",
+            description=(
+                "La plateforme ne possède aucun superutilisateur ni rôle "
+                "ADMINISTRATEUR actif."
+            ),
             categorie=AlerteIncident.Categorie.SECURITE_ACCES,
             gravite=AlerteIncident.NiveauGravite.CRITIQUE,
             type_concerne=AlerteIncident.TypeConcerne.SYSTEME,
@@ -472,16 +549,45 @@ def detecter():
             origine=AlerteIncident.Origine.SYSTEME_SECURITE,
         )
 
-    sessions = SessionImmersion.objects.filter(
-        statut__in=[
-            SessionImmersion.Statut.OUVERTE,
-            SessionImmersion.Statut.EN_PREPARATION,
-            SessionImmersion.Statut.EN_COURS,
-        ],
-        deleted_at__isnull=True,
-    ).select_related("parametres")
+    sessions = list(
+        SessionImmersion.objects.filter(
+            statut__in=[
+                SessionImmersion.Statut.OUVERTE,
+                SessionImmersion.Statut.EN_PREPARATION,
+                SessionImmersion.Statut.EN_COURS,
+            ],
+            deleted_at__isnull=True,
+        ).select_related("parametres")
+    )
+    session_ids = [session.id for session in sessions]
+    centres_par_session = {}
+    for ligne in (
+        AffectationCentre.objects.filter(
+            session_id__in=session_ids,
+            statut=AffectationCentre.Statut.ACTIVE,
+            deleted_at__isnull=True,
+        )
+        .values(
+            "session_id",
+            "centre_id",
+            "centre__region_id",
+            "centre__region__code",
+        )
+        .distinct()
+        .iterator(chunk_size=taille_lot)
+    ):
+        centres_par_session.setdefault(ligne["session_id"], []).append(ligne)
+
+    centres_avec_seances = set(
+        Seance.objects.filter(
+            session_id__in=session_ids,
+            statut__in=[Seance.Statut.PLANIFIEE, Seance.Statut.EN_COURS],
+            deleted_at__isnull=True,
+        ).values_list("session_id", "centre_id").distinct()
+    )
+
     for session in sessions:
-        if not _role_actif("DGAS", session_id=session.id):
+        if not _role_couvre(couvertures_roles, "DGAS", session_id=session.id):
             yield Anomalie(
                 code="ACC_POSTE_DGAS_VACANT",
                 cle=f"ACC_POSTE_DGAS_VACANT:{session.id}",
@@ -498,22 +604,15 @@ def detecter():
                 origine=AlerteIncident.Origine.SYSTEME_SECURITE,
             )
 
-        centres = (
-            AffectationCentre.objects.filter(
-                session_id=session.id,
-                statut=AffectationCentre.Statut.ACTIVE,
-                deleted_at__isnull=True,
-            )
-            .values("centre_id", "centre__region__code")
-            .distinct()
-        )
         regions_vues = set()
-        for ligne in centres:
+        for ligne in centres_par_session.get(session.id, []):
             centre_id = ligne["centre_id"]
+            region_id = ligne["centre__region_id"]
             region_code = ligne["centre__region__code"]
             if region_code not in regions_vues:
                 regions_vues.add(region_code)
-                if not _role_actif(
+                if not _role_couvre(
+                    couvertures_roles,
                     "DIRECTEUR_REGIONAL",
                     session_id=session.id,
                     region_code=region_code,
@@ -522,18 +621,23 @@ def detecter():
                         code="ACC_POSTE_DR_VACANT",
                         cle=f"ACC_POSTE_DR_VACANT:{session.id}:{region_code}",
                         titre=f"Région {region_code} sans Directeur régional actif",
-                        description="Une région utilisée par la session ne possède aucun Directeur régional actif.",
+                        description=(
+                            "Une région utilisée par la session ne possède aucun "
+                            "Directeur régional actif."
+                        ),
                         categorie=AlerteIncident.Categorie.SECURITE_ACCES,
                         gravite=AlerteIncident.NiveauGravite.CRITIQUE,
                         type_concerne=AlerteIncident.TypeConcerne.SESSION,
                         session_id=session.id,
+                        region_id=region_id,
                         module_source="accounts",
                         modele_source="AffectationRole",
                         est_bloquante=True,
                         origine=AlerteIncident.Origine.SYSTEME_SECURITE,
                         contexte={"region_code": region_code},
                     )
-            if not _role_actif(
+            if not _role_couvre(
+                couvertures_roles,
                 "RESPONSABLE_CENTRE",
                 session_id=session.id,
                 region_code=region_code,
@@ -543,11 +647,14 @@ def detecter():
                     code="ACC_POSTE_RESPONSABLE_CENTRE_VACANT",
                     cle=f"ACC_POSTE_RESPONSABLE_CENTRE_VACANT:{session.id}:{centre_id}",
                     titre="Centre opérationnel sans responsable actif",
-                    description="Aucun Responsable de centre actif ne couvre ce centre pour la session.",
+                    description=(
+                        "Aucun Responsable de centre actif ne couvre ce centre pour la session."
+                    ),
                     categorie=AlerteIncident.Categorie.SECURITE_ACCES,
                     gravite=AlerteIncident.NiveauGravite.CRITIQUE,
                     type_concerne=AlerteIncident.TypeConcerne.CENTRE,
                     session_id=session.id,
+                    region_id=region_id,
                     centre_id=centre_id,
                     module_source="accounts",
                     modele_source="AffectationRole",
@@ -556,21 +663,30 @@ def detecter():
                 )
 
             parametres = getattr(session, "parametres", None)
-            if parametres and parametres.visite_medicale_active and not _role_actif(
-                "AGENT_SANTE",
-                session_id=session.id,
-                region_code=region_code,
-                centre_id=centre_id,
+            if (
+                parametres
+                and parametres.visite_medicale_active
+                and not _role_couvre(
+                    couvertures_roles,
+                    "AGENT_SANTE",
+                    session_id=session.id,
+                    region_code=region_code,
+                    centre_id=centre_id,
+                )
             ):
                 yield Anomalie(
                     code="ACC_POSTE_AGENT_SANTE_VACANT",
                     cle=f"ACC_POSTE_AGENT_SANTE_VACANT:{session.id}:{centre_id}",
                     titre="Centre sans agent santé actif",
-                    description="La visite médicale est activée mais aucun Agent santé actif ne couvre le centre.",
+                    description=(
+                        "La visite médicale est activée mais aucun Agent santé actif "
+                        "ne couvre le centre."
+                    ),
                     categorie=AlerteIncident.Categorie.SECURITE_ACCES,
                     gravite=AlerteIncident.NiveauGravite.CRITIQUE,
                     type_concerne=AlerteIncident.TypeConcerne.CENTRE,
                     session_id=session.id,
+                    region_id=region_id,
                     centre_id=centre_id,
                     module_source="accounts",
                     modele_source="AffectationRole",
@@ -578,26 +694,29 @@ def detecter():
                     origine=AlerteIncident.Origine.SYSTEME_SECURITE,
                 )
 
-            if Seance.objects.filter(
-                session_id=session.id,
-                centre_id=centre_id,
-                statut__in=[Seance.Statut.PLANIFIEE, Seance.Statut.EN_COURS],
-                deleted_at__isnull=True,
-            ).exists() and not _role_actif(
-                "FORMATEUR",
-                session_id=session.id,
-                region_code=region_code,
-                centre_id=centre_id,
+            if (
+                (session.id, centre_id) in centres_avec_seances
+                and not _role_couvre(
+                    couvertures_roles,
+                    "FORMATEUR",
+                    session_id=session.id,
+                    region_code=region_code,
+                    centre_id=centre_id,
+                )
             ):
                 yield Anomalie(
                     code="ACC_POSTE_FORMATEUR_VACANT",
                     cle=f"ACC_POSTE_FORMATEUR_VACANT:{session.id}:{centre_id}",
                     titre="Centre avec séances mais sans formateur actif",
-                    description="Des séances sont programmées alors qu'aucun rôle FORMATEUR actif ne couvre le centre.",
+                    description=(
+                        "Des séances sont programmées alors qu'aucun rôle FORMATEUR "
+                        "actif ne couvre le centre."
+                    ),
                     categorie=AlerteIncident.Categorie.SECURITE_ACCES,
                     gravite=AlerteIncident.NiveauGravite.ELEVE,
                     type_concerne=AlerteIncident.TypeConcerne.CENTRE,
                     session_id=session.id,
+                    region_id=region_id,
                     centre_id=centre_id,
                     module_source="accounts",
                     modele_source="AffectationRole",

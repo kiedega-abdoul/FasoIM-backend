@@ -16,6 +16,7 @@ class Anomalie:
     gravite: str = AlerteIncident.NiveauGravite.MOYEN
     type_concerne: str = AlerteIncident.TypeConcerne.DONNEE
     session_id: int | None = None
+    region_id: int | None = None
     centre_id: int | None = None
     affectation_centre_id: int | None = None
     acteur_concerne_id: int | None = None
@@ -25,6 +26,7 @@ class Anomalie:
     est_bloquante: bool = False
     resolution_automatique: bool = True
     origine: str = AlerteIncident.Origine.AUTOMATIQUE
+    niveau_confidentialite: str | None = None
     contexte: dict = field(default_factory=dict)
 
 

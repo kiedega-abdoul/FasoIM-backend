@@ -16,7 +16,10 @@ from .service import AlerteAutomatiqueService
 
 class ProgressionIncidentsService:
     EXPIRATION_PROGRESSION = 60 * 60 * 24
-    EXPIRATION_VERROU = 60 * 5
+    EXPIRATION_VERROU = getattr(
+        settings, "INCIDENTS_SCAN_LOCK_SECONDS",
+        getattr(settings, "CELERY_TASK_TIME_LIMIT", 1800) + 300,
+    )
     EXPIRATION_DEBOUNCE = getattr(
         settings, "INCIDENTS_SCAN_DEBOUNCE_SECONDS", 30
     )

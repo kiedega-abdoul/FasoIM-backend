@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from rest_framework import status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, ValidationError
 from rest_framework.response import Response
@@ -50,8 +51,15 @@ def _lever_erreur(exception):
     raise exception
 
 
+class PaginationIncident(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class AlerteIncidentViewSet(viewsets.ModelViewSet):
     permission_classes = [PermissionAlerteIncident]
+    pagination_class = PaginationIncident
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
 
     def get_queryset(self):
@@ -218,6 +226,8 @@ class AlerteIncidentViewSet(viewsets.ModelViewSet):
         qs = visibles
         if serializer.validated_data.get("session_id"):
             qs = qs.filter(session_id=serializer.validated_data["session_id"])
+        if serializer.validated_data.get("region_id"):
+            qs = qs.filter(region_id=serializer.validated_data["region_id"])
         if serializer.validated_data.get("centre_id"):
             qs = qs.filter(centre_id=serializer.validated_data["centre_id"])
         donnees = AlerteIncidentRepository.statistiques(queryset=qs)

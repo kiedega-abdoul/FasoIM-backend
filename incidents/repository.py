@@ -19,6 +19,7 @@ class AlerteIncidentRepository:
             AlerteIncident.objects.filter(deleted_at__isnull=True)
             .select_related(
                 "session",
+                "region",
                 "centre",
                 "centre__region",
                 "affectation_centre",
@@ -59,6 +60,7 @@ class AlerteIncidentRepository:
         cls,
         *,
         session_id=None,
+        region_id=None,
         centre_id=None,
         categorie=None,
         niveau_gravite=None,
@@ -74,6 +76,8 @@ class AlerteIncidentRepository:
         qs = cls.base_queryset()
         if session_id:
             qs = qs.filter(session_id=session_id)
+        if region_id:
+            qs = qs.filter(region_id=region_id)
         if centre_id:
             qs = qs.filter(centre_id=centre_id)
         if categorie:
@@ -137,7 +141,10 @@ class AlerteIncidentRepository:
                     return cls.base_queryset()
                 condition |= portee
             elif affectation.niveau_affectation == AffectationActeur.NiveauAffectation.REGION:
-                condition |= portee & Q(centre__region__code__iexact=affectation.region_code)
+                condition |= portee & (
+                    Q(region__code__iexact=affectation.region_code)
+                    | Q(centre__region__code__iexact=affectation.region_code)
+                )
             elif affectation.niveau_affectation == AffectationActeur.NiveauAffectation.CENTRE:
                 condition |= portee & Q(centre_id=affectation.centre_id)
 

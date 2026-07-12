@@ -1,13 +1,26 @@
 from django.urls import include, path
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from .views import AlerteIncidentViewSet, OperationIncidentViewSet
 
 
 app_name = "incidents"
 
-router = DefaultRouter()
-router.register("incidents", AlerteIncidentViewSet, basename="alertes-incidents")
-router.register("operations", OperationIncidentViewSet, basename="operations-incidents")
+operations_router = SimpleRouter()
+operations_router.register(
+    "operations",
+    OperationIncidentViewSet,
+    basename="operations-incidents",
+)
 
-urlpatterns = [path("", include(router.urls))]
+incidents_router = SimpleRouter()
+incidents_router.register(
+    "",
+    AlerteIncidentViewSet,
+    basename="alertes-incidents",
+)
+
+urlpatterns = [
+    path("", include(operations_router.urls)),
+    path("", include(incidents_router.urls)),
+]

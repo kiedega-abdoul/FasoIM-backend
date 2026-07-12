@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -53,7 +54,6 @@ CACHE_TEST = {
 )
 class BaseIncidentTest(TestCase):
     PERMISSIONS_INCIDENTS = [
-        "creer_alerte",
         "signaler_incident",
         "modifier_incident",
         "prendre_en_charge_incident",
@@ -124,18 +124,19 @@ class BaseIncidentTest(TestCase):
             code=f"ROLE_{username.upper().replace('-', '_')}",
             libelle=f"Rôle {username}",
             niveau=30,
-            perimetre_autorise=(
-                Role.Perimetre.CENTRE
-                if niveau == AffectationActeur.NiveauAffectation.CENTRE
-                else Role.Perimetre.NATIONAL
-            ),
+            perimetre_autorise={
+                AffectationActeur.NiveauAffectation.CENTRE: Role.Perimetre.CENTRE,
+                AffectationActeur.NiveauAffectation.REGION: Role.Perimetre.REGION,
+                AffectationActeur.NiveauAffectation.NATIONAL: Role.Perimetre.NATIONAL,
+                AffectationActeur.NiveauAffectation.PLATEFORME: Role.Perimetre.PLATEFORME,
+            }[niveau],
             est_systeme=False,
             est_modifiable=True,
         )
         permissions = codes if codes is not None else [
             code
             for code in self.PERMISSIONS_INCIDENTS
-            if code not in {"creer_alerte", "generer_alerte_automatique"}
+            if code != "generer_alerte_automatique"
         ]
         for code in permissions:
             permission, _ = Permission.objects.get_or_create(
@@ -197,8 +198,13 @@ class SignalementIncidentTests(BaseIncidentTest):
         self.assertEqual(incident.type, AlerteIncident.Type.INCIDENT)
         self.assertEqual(incident.origine, AlerteIncident.Origine.MANUELLE)
         self.assertEqual(incident.centre, self.centre)
+        self.assertEqual(incident.region, self.region)
         self.assertEqual(incident.session, self.session)
         self.assertEqual(incident.statut, AlerteIncident.Statut.NOUVEAU)
+        self.assertEqual(
+            incident.niveau_confidentialite,
+            AlerteIncident.Confidentialite.RESTREINTE,
+        )
 
     def test_gravite_critique_rend_signalement_bloquant(self):
         incident = self.signaler(gravite=AlerteIncident.NiveauGravite.CRITIQUE)
@@ -433,6 +439,73 @@ class AlerteAutomatiqueTests(BaseIncidentTest):
         self.assertEqual(resultat.echecs, 0)
 
 
+    @override_settings(
+        INCIDENTS_TAILLE_LOT_SCAN=50,
+        INCIDENTS_MAX_ALERTES_CREEES_PAR_REGLE=1000,
+    )
+    def test_detecteur_parcourt_plus_de_cinq_cents_anomalies(self):
+        def generer():
+            for numero in range(1, 502):
+                yield Anomalie(
+                    code="TEST_VOLUME",
+                    cle=f"TEST_VOLUME:{numero}",
+                    titre=f"Anomalie {numero}",
+                    description="Anomalie de volume détectée.",
+                    categorie=AlerteIncident.Categorie.SYSTEME,
+                    module_source="tests-volume",
+                    modele_source="Test",
+                    objet_source_id=numero,
+                )
+
+        detecteur = Detecteur("tests-volume", ("TEST_VOLUME",), generer)
+        resultat = AlerteAutomatiqueService.executer_detecteur(detecteur)
+
+        self.assertEqual(resultat.detectes, 501)
+        self.assertEqual(resultat.crees, 501)
+        self.assertTrue(
+            AlerteIncident.objects.filter(
+                cle_deduplication="TEST_VOLUME:501",
+                statut=AlerteIncident.Statut.NOUVEAU,
+            ).exists()
+        )
+
+    @override_settings(
+        INCIDENTS_TAILLE_LOT_SCAN=2,
+        INCIDENTS_MAX_ALERTES_CREEES_PAR_REGLE=2,
+    )
+    def test_limite_concerne_les_creations_pas_les_objets_controles(self):
+        def generer():
+            for numero in range(1, 5):
+                yield Anomalie(
+                    code="TEST_LIMITE_CREATION",
+                    cle=f"TEST_LIMITE_CREATION:{numero}",
+                    titre=f"Anomalie {numero}",
+                    description="Anomalie contrôlée malgré la limite de création.",
+                    categorie=AlerteIncident.Categorie.SYSTEME,
+                    module_source="tests-limite",
+                )
+
+        detecteur = Detecteur(
+            "tests-limite",
+            ("TEST_LIMITE_CREATION",),
+            generer,
+        )
+        premier = AlerteAutomatiqueService.executer_detecteur(detecteur)
+        second = AlerteAutomatiqueService.executer_detecteur(detecteur)
+
+        self.assertEqual(premier.detectes, 4)
+        self.assertEqual(premier.crees, 2)
+        self.assertEqual(premier.non_crees_limite, 2)
+        self.assertEqual(second.detectes, 4)
+        self.assertEqual(AlerteIncident.objects.filter(module_source="tests-limite").count(), 4)
+        self.assertFalse(
+            AlerteIncident.objects.filter(
+                module_source="tests-limite",
+                statut=AlerteIncident.Statut.RESOLU,
+            ).exists()
+        )
+
+
 class PerimetreEtConfidentialiteTests(BaseIncidentTest):
     def test_acteur_centre_ne_voit_pas_incident_autre_centre(self):
         autre_region = RegionImmersion.objects.create(code="EST", nom="Est")
@@ -502,11 +575,83 @@ class PerimetreEtConfidentialiteTests(BaseIncidentTest):
         incident = self.signaler(
             raison="Un immergé a fait un malaise et présente une douleur importante."
         )
-        autre = self.creer_acteur_autorise("autre-agent")
+        autre = self.creer_acteur_autorise(
+            "autre-agent",
+            codes=["consulter_incidents"],
+        )
         requete = type("Request", (), {"user": autre})()
         donnees = AlerteIncidentSerializer(incident, context={"request": requete}).data
         self.assertNotEqual(donnees["description"], incident.description)
         self.assertIn("Détails réservés", donnees["description"])
+
+
+    def test_acteur_regional_voit_alerte_regionale_sans_centre(self):
+        regional = self.creer_acteur_autorise(
+            "directeur-regional-test",
+            niveau=AffectationActeur.NiveauAffectation.REGION,
+            codes=["consulter_incidents"],
+        )
+        alerte = AlerteIncident.objects.create(
+            session=self.session,
+            region=self.region,
+            type=AlerteIncident.Type.ALERTE,
+            origine=AlerteIncident.Origine.AUTOMATIQUE,
+            type_concerne=AlerteIncident.TypeConcerne.DONNEE,
+            categorie=AlerteIncident.Categorie.SECURITE_ACCES,
+            titre="Poste régional vacant",
+            description="Aucun directeur régional actif.",
+            code_detection="TEST_REGION",
+            module_source="tests",
+            cle_deduplication="TEST_REGION:CENTRE",
+        )
+        self.assertTrue(
+            AlerteIncidentRepository.visibles_pour(regional)
+            .filter(id=alerte.id)
+            .exists()
+        )
+
+    def test_raison_manuelle_sensible_sans_mot_cle_reste_masquee(self):
+        incident = self.signaler(
+            raison="L'immergé a vomi et a perdu connaissance soudainement."
+        )
+        self.assertEqual(incident.categorie, AlerteIncident.Categorie.AUTRE)
+        self.assertEqual(
+            incident.niveau_confidentialite,
+            AlerteIncident.Confidentialite.RESTREINTE,
+        )
+        autre = self.creer_acteur_autorise(
+            "lecteur-restreint",
+            codes=["consulter_incidents"],
+        )
+        requete = type("Request", (), {"user": autre})()
+        donnees = AlerteIncidentSerializer(incident, context={"request": requete}).data
+        self.assertNotEqual(donnees["description"], incident.description)
+        self.assertIn("Détails réservés", donnees["description"])
+
+    def test_liste_incidents_est_paginee_et_url_non_redondante(self):
+        for numero in range(30):
+            AlerteIncident.objects.create(
+                session=self.session,
+                region=self.region,
+                centre=self.centre,
+                type=AlerteIncident.Type.ALERTE,
+                origine=AlerteIncident.Origine.AUTOMATIQUE,
+                type_concerne=AlerteIncident.TypeConcerne.CENTRE,
+                categorie=AlerteIncident.Categorie.SYSTEME,
+                titre=f"Alerte pagination {numero}",
+                description="Alerte créée pour tester la pagination.",
+                code_detection="TEST_PAGINATION",
+                module_source="tests",
+                cle_deduplication=f"TEST_PAGINATION:{numero}",
+            )
+        self.client.force_authenticate(self.acteur)
+        url = reverse("incidents:alertes-incidents-list")
+        reponse = self.client.get(url)
+
+        self.assertEqual(url, "/api/incidents/")
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(reponse.data["count"], 30)
+        self.assertEqual(len(reponse.data["results"]), 25)
 
 
 class DetecteursEtTachesTests(BaseIncidentTest):
@@ -583,3 +728,27 @@ class DetecteursEtTachesTests(BaseIncidentTest):
         resultat = scanner_module_task.apply(kwargs={"module": "repas"}).get()
         self.assertEqual(resultat["statut"], ProgressionIncidentsService.TERMINEE)
         executer.assert_called_once()
+
+    def test_verrou_scan_depasse_la_limite_celery(self):
+        self.assertGreater(
+            ProgressionIncidentsService.EXPIRATION_VERROU,
+            settings.CELERY_TASK_TIME_LIMIT,
+        )
+
+    def test_seed_attribue_les_permissions_incidents_et_retire_creer_alerte(self):
+        call_command("seed_accounts", verbosity=0)
+        self.assertFalse(
+            Permission.objects.filter(
+                code="creer_alerte",
+                deleted_at__isnull=True,
+            ).exists()
+        )
+        administrateur = Role.objects.get(code="ADMINISTRATEUR")
+        self.assertTrue(
+            RolePermission.objects.filter(
+                role=administrateur,
+                permission__code="generer_alerte_automatique",
+                statut=RolePermission.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            ).exists()
+        )

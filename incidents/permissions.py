@@ -19,8 +19,8 @@ def _entier(value):
 def contexte_incident(obj):
     if not isinstance(obj, AlerteIncident):
         return {"session_id": None, "centre_id": None, "region_code": None}
-    region_code = None
-    if obj.centre_id and obj.centre:
+    region_code = obj.region.code if obj.region_id and obj.region else None
+    if not region_code and obj.centre_id and obj.centre:
         region_code = obj.centre.region.code
     return {
         "session_id": obj.session_id,
@@ -40,7 +40,7 @@ def extraire_perimetre(request, view=None, obj=None):
 
     pk = getattr(view, "kwargs", {}).get("pk") if view else None
     if pk and not (session_id or centre_id):
-        incident = AlerteIncident.objects.select_related("centre__region").filter(
+        incident = AlerteIncident.objects.select_related("region", "centre__region").filter(
             id=pk,
             deleted_at__isnull=True,
         ).first()

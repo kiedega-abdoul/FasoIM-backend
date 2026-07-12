@@ -1,12 +1,9 @@
 """Commande d'initialisation des rôles et permissions système FasoIM.
 
-Cette commande insère seulement :
+Cette commande insère :
 - les permissions système déjà codées dans le backend ;
-- les rôles système de base.
-
-Elle n'associe pas automatiquement les permissions aux rôles. Ces associations
-seront faites plus tard par l'administrateur ou par une commande dédiée lorsque
-le catalogue final sera validé.
+- les rôles système de base ;
+- les associations minimales du module incidents aux rôles système.
 """
 
 from __future__ import annotations
@@ -15,8 +12,9 @@ from dataclasses import dataclass
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
-from accounts.models import Permission, Role
+from accounts.models import Permission, Role, RolePermission
 
 
 @dataclass(frozen=True)
@@ -353,7 +351,6 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("consulter_progression_repas", "Consulter la progression des repas", "repas", "Consulter dans Redis la progression d'une opération massive."),
 
     # Alertes et incidents
-    PermissionDefinition("creer_alerte", "Créer une alerte", "incidents", "Créer une alerte technique ou opérationnelle depuis un service autorisé."),
     PermissionDefinition("signaler_incident", "Signaler un incident", "incidents", "Signaler rapidement un incident dans son périmètre."),
     PermissionDefinition("modifier_incident", "Modifier un incident", "incidents", "Corriger un signalement manuel encore nouveau."),
     PermissionDefinition("prendre_en_charge_incident", "Prendre en charge un incident", "incidents", "Prendre en charge une alerte ou un incident ouvert."),
@@ -414,8 +411,71 @@ ROLES_SYSTEME = [
 ]
 
 
+PERMISSIONS_INCIDENTS_PAR_ROLE = {
+    "ADMINISTRATEUR": {
+        "signaler_incident",
+        "modifier_incident",
+        "prendre_en_charge_incident",
+        "mettre_incident_en_attente",
+        "resoudre_incident",
+        "cloturer_incident",
+        "annuler_incident",
+        "escalader_incident",
+        "consulter_incidents",
+        "generer_alerte_automatique",
+    },
+    "DGAS": {
+        "signaler_incident",
+        "modifier_incident",
+        "prendre_en_charge_incident",
+        "mettre_incident_en_attente",
+        "resoudre_incident",
+        "cloturer_incident",
+        "annuler_incident",
+        "escalader_incident",
+        "consulter_incidents",
+        "generer_alerte_automatique",
+    },
+    "DIRECTEUR_REGIONAL": {
+        "signaler_incident",
+        "modifier_incident",
+        "prendre_en_charge_incident",
+        "mettre_incident_en_attente",
+        "resoudre_incident",
+        "cloturer_incident",
+        "annuler_incident",
+        "escalader_incident",
+        "consulter_incidents",
+    },
+    "RESPONSABLE_CENTRE": {
+        "signaler_incident",
+        "modifier_incident",
+        "prendre_en_charge_incident",
+        "mettre_incident_en_attente",
+        "resoudre_incident",
+        "cloturer_incident",
+        "annuler_incident",
+        "escalader_incident",
+        "consulter_incidents",
+    },
+    "FORMATEUR": {
+        "signaler_incident",
+        "modifier_incident",
+        "consulter_incidents",
+    },
+    "AGENT_SANTE": {
+        "signaler_incident",
+        "modifier_incident",
+        "prendre_en_charge_incident",
+        "mettre_incident_en_attente",
+        "resoudre_incident",
+        "consulter_incidents",
+    },
+}
+
+
 class Command(BaseCommand):
-    help = "Initialise les permissions système et les rôles de base FasoIM, sans associations rôle-permission."
+    help = "Initialise les permissions, les rôles de base et les droits incidents FasoIM."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -438,6 +498,22 @@ class Command(BaseCommand):
         permissions_mises_a_jour = 0
         roles_crees = 0
         roles_mis_a_jour = 0
+        associations_incidents_creees = 0
+        associations_incidents_mises_a_jour = 0
+
+        permission_obsolete = Permission.objects.filter(
+            code="creer_alerte",
+            deleted_at__isnull=True,
+        ).first()
+        if permission_obsolete:
+            permission_obsolete.code = (
+                f"creer_alerte__obsolete__{permission_obsolete.id}"
+            )[:120]
+            permission_obsolete.statut = Permission.Statut.INACTIVE
+            permission_obsolete.deleted_at = timezone.now()
+            permission_obsolete.save(
+                update_fields=["code", "statut", "deleted_at", "updated_at"]
+            )
 
         for definition in PERMISSIONS_SYSTEME:
             _, created = Permission.objects.update_or_create(
@@ -475,9 +551,40 @@ class Command(BaseCommand):
             else:
                 roles_mis_a_jour += 1
 
+        for code_role, codes_permissions in PERMISSIONS_INCIDENTS_PAR_ROLE.items():
+            role = Role.objects.get(code=code_role, deleted_at__isnull=True)
+            permissions = Permission.objects.filter(
+                code__in=codes_permissions,
+                module="incidents",
+                statut=Permission.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            )
+            for permission in permissions:
+                _, created = RolePermission.objects.update_or_create(
+                    role=role,
+                    permission=permission,
+                    deleted_at__isnull=True,
+                    defaults={
+                        "est_delegable": False,
+                        "perimetre_delegation_max": role.perimetre_autorise,
+                        "statut": RolePermission.Statut.ACTIVE,
+                        "deleted_at": None,
+                    },
+                )
+                if created:
+                    associations_incidents_creees += 1
+                else:
+                    associations_incidents_mises_a_jour += 1
+
         self.stdout.write(self.style.SUCCESS("Initialisation accounts terminée."))
         self.stdout.write(f"Permissions créées : {permissions_creees}")
         self.stdout.write(f"Permissions mises à jour : {permissions_mises_a_jour}")
         self.stdout.write(f"Rôles créés : {roles_crees}")
         self.stdout.write(f"Rôles mis à jour : {roles_mis_a_jour}")
-        self.stdout.write(self.style.WARNING("Aucune association rôle-permission n'a été créée."))
+        self.stdout.write(
+            f"Associations incidents créées : {associations_incidents_creees}"
+        )
+        self.stdout.write(
+            "Associations incidents mises à jour : "
+            f"{associations_incidents_mises_a_jour}"
+        )

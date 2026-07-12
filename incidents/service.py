@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections import defaultdict
+from dataclasses import asdict, dataclass, replace
 from datetime import timedelta
 import re
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -11,7 +13,7 @@ from django.utils import timezone
 
 from accounts.models import Acteur, AffectationActeur
 from accounts.service import ControleAccesService
-from affectations.models import AffectationCentre, CentreImmersion
+from affectations.models import AffectationCentre, CentreImmersion, RegionImmersion
 from immerges.models import Immerge
 from sessions_app.models import SessionImmersion
 
@@ -31,6 +33,7 @@ class ResultatScan:
     actualises: int = 0
     resolus: int = 0
     echecs: int = 0
+    non_crees_limite: int = 0
 
     def en_dict(self):
         return asdict(self)
@@ -202,6 +205,7 @@ class AlerteIncidentService:
                 "modele_source": "Immerge",
                 "objet_source_id": immerge.id,
                 "libelle": str(immerge),
+                "region": affectation.centre.region if affectation else None,
                 "region_code": affectation.centre.region.code if affectation else None,
             }
 
@@ -218,6 +222,7 @@ class AlerteIncidentService:
                 "modele_source": "Acteur",
                 "objet_source_id": acteur.id,
                 "libelle": str(acteur),
+                "region": None,
                 "region_code": None,
                 "affectations_cibles": list(cls._affectations_actives_acteur(acteur.id)),
             }
@@ -238,6 +243,7 @@ class AlerteIncidentService:
                 "modele_source": "CentreImmersion",
                 "objet_source_id": centre.id,
                 "libelle": centre.nom,
+                "region": centre.region,
                 "region_code": centre.region.code,
             }
 
@@ -257,6 +263,7 @@ class AlerteIncidentService:
                 "modele_source": "SessionImmersion",
                 "objet_source_id": session.id,
                 "libelle": str(session),
+                "region": None,
                 "region_code": None,
             }
 
@@ -315,8 +322,14 @@ class AlerteIncidentService:
                         deleted_at__isnull=True,
                     ).first()
                     cible["centre"] = centre
+                    cible["region"] = centre.region if centre else None
                     cible["region_code"] = centre.region.code if centre else affectation.region_code
                 else:
+                    region = RegionImmersion.objects.filter(
+                        code__iexact=affectation.region_code,
+                        deleted_at__isnull=True,
+                    ).first() if affectation.region_code else None
+                    cible["region"] = region
                     cible["region_code"] = affectation.region_code or None
                 return cible
 
@@ -386,8 +399,14 @@ class AlerteIncidentService:
 
         categorie = cls.classifier_categorie(raison)
         titre = f"{AlerteIncident.Categorie(categorie).label} concernant {cible['libelle']}"
+        confidentialite = (
+            AlerteIncident.Confidentialite.MEDICALE
+            if categorie == AlerteIncident.Categorie.SANTE
+            else AlerteIncident.Confidentialite.RESTREINTE
+        )
         incident = AlerteIncident(
             session=cible.get("session"),
+            region=cible.get("region") or getattr(cible.get("centre"), "region", None),
             centre=cible.get("centre"),
             affectation_centre=cible.get("affectation_centre"),
             acteur_concerne=cible.get("acteur_concerne"),
@@ -399,6 +418,7 @@ class AlerteIncidentService:
             description=raison,
             niveau_gravite=niveau_gravite,
             statut=AlerteIncident.Statut.NOUVEAU,
+            niveau_confidentialite=confidentialite,
             module_source="incidents",
             modele_source=cible.get("modele_source", ""),
             objet_source_id=cible.get("objet_source_id"),
@@ -413,8 +433,8 @@ class AlerteIncidentService:
 
     @classmethod
     def _contexte_incident(cls, incident):
-        region_code = None
-        if incident.centre_id and incident.centre:
+        region_code = incident.region.code if incident.region_id and incident.region else None
+        if not region_code and incident.centre_id and incident.centre:
             region_code = incident.centre.region.code
         return {
             "session_id": incident.session_id,
@@ -457,7 +477,11 @@ class AlerteIncidentService:
                 raise ValidationIncidentErreur({"raison": "La raison est trop courte."})
             incident.description = raison
             incident.categorie = cls.classifier_categorie(raison)
-            champs.extend(["description", "categorie"])
+            if incident.categorie == AlerteIncident.Categorie.SANTE:
+                incident.niveau_confidentialite = AlerteIncident.Confidentialite.MEDICALE
+            elif incident.niveau_confidentialite == AlerteIncident.Confidentialite.NORMALE:
+                incident.niveau_confidentialite = AlerteIncident.Confidentialite.RESTREINTE
+            champs.extend(["description", "categorie", "niveau_confidentialite"])
         if champs:
             incident.save(update_fields=[*set(champs), "updated_at"])
         return incident
@@ -640,39 +664,62 @@ class AlerteIncidentService:
 class AlerteAutomatiqueService:
     """Transforme les anomalies lues dans les autres modules en alertes.
 
-    Ce service ne remplace aucune validation métier. Il observe seulement l'état
-    persistant après les opérations effectuées par les applications propriétaires.
+    Les détecteurs parcourent toutes les données par lots. La limite configurée
+    porte uniquement sur les nouvelles alertes créées pendant un passage, jamais
+    sur les objets contrôlés. La résolution automatique n'est lancée qu'après la
+    fin complète du détecteur.
     """
+
+    @staticmethod
+    def _confidentialite_anomalie(anomalie):
+        if anomalie.niveau_confidentialite:
+            return anomalie.niveau_confidentialite
+        if anomalie.categorie == AlerteIncident.Categorie.SANTE:
+            return AlerteIncident.Confidentialite.MEDICALE
+        return AlerteIncident.Confidentialite.NORMALE
 
     @classmethod
     @transaction.atomic
-    def enregistrer_anomalie(cls, anomalie):
+    def enregistrer_anomalie(cls, anomalie, *, autoriser_creation=True):
         maintenant = timezone.now()
         incident = AlerteIncidentRepository.get_ouvert_par_cle_pour_update(anomalie.cle)
+        confidentialite = cls._confidentialite_anomalie(anomalie)
         if incident:
             incident.nombre_occurrences += 1
             incident.date_derniere_detection = maintenant
+            incident.region_id = anomalie.region_id
             incident.titre = anomalie.titre[:255]
             incident.description = anomalie.description
             incident.niveau_gravite = anomalie.gravite
             incident.est_bloquante = anomalie.est_bloquante
+            if (
+                incident.niveau_confidentialite
+                != AlerteIncident.Confidentialite.MEDICALE
+            ):
+                incident.niveau_confidentialite = confidentialite
             incident.contexte = anomalie.contexte or {}
             incident.save(
                 update_fields=[
                     "nombre_occurrences",
                     "date_derniere_detection",
+                    "region",
                     "titre",
                     "description",
                     "niveau_gravite",
                     "est_bloquante",
+                    "niveau_confidentialite",
                     "contexte",
                     "updated_at",
                 ]
             )
             return incident, False
 
+        if not autoriser_creation:
+            return None, False
+
         incident = AlerteIncident(
             session_id=anomalie.session_id,
+            region_id=anomalie.region_id,
             centre_id=anomalie.centre_id,
             affectation_centre_id=anomalie.affectation_centre_id,
             acteur_concerne_id=anomalie.acteur_concerne_id,
@@ -684,6 +731,7 @@ class AlerteAutomatiqueService:
             description=anomalie.description,
             niveau_gravite=anomalie.gravite,
             statut=AlerteIncident.Statut.NOUVEAU,
+            niveau_confidentialite=confidentialite,
             code_detection=anomalie.code,
             module_source=anomalie.module_source,
             modele_source=anomalie.modele_source,
@@ -699,8 +747,6 @@ class AlerteAutomatiqueService:
         )
         incident.full_clean()
         try:
-            # Savepoint local : si deux workers détectent la même anomalie au même
-            # instant, l'IntegrityError n'endommage pas la transaction extérieure.
             with transaction.atomic():
                 incident.save()
             return incident, True
@@ -733,26 +779,77 @@ class AlerteAutomatiqueService:
             | Q(date_derniere_detection__isnull=True)
         )
         maintenant = timezone.now()
-        total = qs.update(
+        return qs.update(
             statut=AlerteIncident.Statut.RESOLU,
             resolution="Anomalie disparue lors du contrôle automatique.",
             date_resolution=maintenant,
             updated_at=maintenant,
         )
-        return total
+
+    @staticmethod
+    def _enrichir_regions(anomalies):
+        centre_ids = {a.centre_id for a in anomalies if a.centre_id and not a.region_id}
+        affectation_ids = {
+            a.affectation_centre_id
+            for a in anomalies
+            if a.affectation_centre_id and not a.region_id and not a.centre_id
+        }
+        regions_centres = dict(
+            CentreImmersion.objects.filter(id__in=centre_ids).values_list("id", "region_id")
+        )
+        regions_affectations = dict(
+            AffectationCentre.objects.filter(id__in=affectation_ids).values_list(
+                "id", "centre__region_id"
+            )
+        )
+        resultat = []
+        for anomalie in anomalies:
+            region_id = anomalie.region_id
+            if not region_id and anomalie.centre_id:
+                region_id = regions_centres.get(anomalie.centre_id)
+            if not region_id and anomalie.affectation_centre_id:
+                region_id = regions_affectations.get(anomalie.affectation_centre_id)
+            resultat.append(replace(anomalie, region_id=region_id))
+        return resultat
 
     @classmethod
     def executer_detecteur(cls, detecteur):
         debut_scan = timezone.now()
         resultat = ResultatScan(module=detecteur.module)
-        anomalies = list(detecteur.fonction())
-        resultat.detectes = len(anomalies)
-        for anomalie in anomalies:
-            _, cree = cls.enregistrer_anomalie(anomalie)
-            if cree:
-                resultat.crees += 1
-            else:
-                resultat.actualises += 1
+        taille_lot = max(1, int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", 500)))
+        maximum_creations = max(
+            0,
+            int(getattr(settings, "INCIDENTS_MAX_ALERTES_CREEES_PAR_REGLE", 500)),
+        )
+        creations_par_code = defaultdict(int)
+        lot = []
+
+        def traiter_lot(lignes):
+            for anomalie in cls._enrichir_regions(lignes):
+                autoriser_creation = creations_par_code[anomalie.code] < maximum_creations
+                incident, cree = cls.enregistrer_anomalie(
+                    anomalie,
+                    autoriser_creation=autoriser_creation,
+                )
+                if cree:
+                    creations_par_code[anomalie.code] += 1
+                    resultat.crees += 1
+                elif incident is not None:
+                    resultat.actualises += 1
+                else:
+                    resultat.non_crees_limite += 1
+
+        # Le générateur est entièrement consommé. Une exception interrompt la
+        # méthode avant ``resoudre_absentes`` et empêche toute fausse résolution.
+        for anomalie in detecteur.fonction():
+            resultat.detectes += 1
+            lot.append(anomalie)
+            if len(lot) >= taille_lot:
+                traiter_lot(lot)
+                lot.clear()
+        if lot:
+            traiter_lot(lot)
+
         resultat.resolus = cls.resoudre_absentes(
             module=detecteur.module,
             codes=detecteur.codes,

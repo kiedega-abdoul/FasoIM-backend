@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, F, Q
+from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils import timezone
 
 from affectations.models import AffectationCentre
@@ -38,14 +38,14 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def detecter():
     aujourd_hui = timezone.localdate()
-    limite = _limite()
-    affectations = AffectationCentre.objects.filter(
+    taille_lot = _taille_lot()
+    base_affectations = AffectationCentre.objects.filter(
         statut=AffectationCentre.Statut.ACTIVE,
         deleted_at__isnull=True,
         session__statut__in=[
@@ -53,21 +53,41 @@ def detecter():
             SessionImmersion.Statut.EN_COURS,
         ],
         session__deleted_at__isnull=True,
-    ).select_related("session__parametres", "centre")[:limite]
+    )
 
-    couples = {(a.session_id, a.centre_id): a for a in affectations}
-    for (session_id, centre_id), exemple in couples.items():
-        regle = RegleOrganisationCentre.objects.filter(
-            session_id=session_id,
-            centre_id=centre_id,
+    # Les règles sont chargées en une fois par couple session/centre, au lieu
+    # d'exécuter une requête pour chaque affectation individuelle.
+    couples = list(
+        base_affectations.values(
+            "session_id",
+            "centre_id",
+            "session__date_debut",
+            "session__statut",
+        ).distinct()
+    )
+    session_ids = {ligne["session_id"] for ligne in couples}
+    centre_ids = {ligne["centre_id"] for ligne in couples}
+    regles = {
+        (regle.session_id, regle.centre_id): regle
+        for regle in RegleOrganisationCentre.objects.filter(
+            session_id__in=session_ids,
+            centre_id__in=centre_ids,
             deleted_at__isnull=True,
-        ).first()
+        ).iterator(chunk_size=taille_lot)
+    }
+    for ligne in couples:
+        session_id = ligne["session_id"]
+        centre_id = ligne["centre_id"]
+        regle = regles.get((session_id, centre_id))
         if not regle:
             yield Anomalie(
                 code="ORG_REGLES_CENTRE_ABSENTES",
                 cle=f"ORG_REGLES_CENTRE_ABSENTES:{session_id}:{centre_id}",
                 titre="Centre sans règles d'organisation",
-                description="Un centre recevant des immergés ne possède aucun paramétrage d'organisation actif.",
+                description=(
+                    "Un centre recevant des immergés ne possède aucun paramétrage "
+                    "d'organisation actif."
+                ),
                 categorie=AlerteIncident.Categorie.ORGANISATION,
                 gravite=AlerteIncident.NiveauGravite.CRITIQUE,
                 type_concerne=AlerteIncident.TypeConcerne.CENTRE,
@@ -78,7 +98,7 @@ def detecter():
                 est_bloquante=True,
             )
         elif (
-            exemple.session.date_debut <= aujourd_hui + timedelta(days=2)
+            ligne["session__date_debut"] <= aujourd_hui + timedelta(days=2)
             and regle.statut not in {
                 RegleOrganisationCentre.Statut.VALIDEE,
                 RegleOrganisationCentre.Statut.PRETE_PUBLICATION,
@@ -88,7 +108,10 @@ def detecter():
                 code="ORG_REGLES_NON_PRETES",
                 cle=f"ORG_REGLES_NON_PRETES:{session_id}:{centre_id}",
                 titre="Organisation du centre non prête",
-                description="La session débute bientôt mais les règles du centre ne sont pas validées ou prêtes à publier.",
+                description=(
+                    "La session débute bientôt mais les règles du centre ne sont "
+                    "pas validées ou prêtes à publier."
+                ),
                 categorie=AlerteIncident.Categorie.ORGANISATION,
                 gravite=AlerteIncident.NiveauGravite.ELEVE,
                 type_concerne=AlerteIncident.TypeConcerne.CENTRE,
@@ -97,28 +120,50 @@ def detecter():
                 module_source="organisation",
                 modele_source="RegleOrganisationCentre",
                 objet_source_id=regle.id,
-                est_bloquante=exemple.session.statut == SessionImmersion.Statut.EN_COURS,
+                est_bloquante=(
+                    ligne["session__statut"] == SessionImmersion.Statut.EN_COURS
+                ),
             )
 
-    for affectation in affectations:
-        groupe_ouvert = AffectationGroupe.objects.filter(
-            affectation_centre_id=affectation.id,
-            statut__in=[
-                AffectationGroupe.Statut.PROPOSEE,
-                AffectationGroupe.Statut.ACTIVE,
-                AffectationGroupe.Statut.A_REORGANISER,
-            ],
-            deleted_at__isnull=True,
-        ).exists()
-        groupe_exige = affectation.session.statut == SessionImmersion.Statut.EN_COURS or (
-            affectation.session.date_debut <= aujourd_hui + timedelta(days=1)
+    groupe_ouvert = AffectationGroupe.objects.filter(
+        affectation_centre_id=OuterRef("pk"),
+        statut__in=[
+            AffectationGroupe.Statut.PROPOSEE,
+            AffectationGroupe.Statut.ACTIVE,
+            AffectationGroupe.Statut.A_REORGANISER,
+        ],
+        deleted_at__isnull=True,
+    )
+    lit_ouvert = AttributionLit.objects.filter(
+        affectation_centre_id=OuterRef("pk"),
+        statut__in=[
+            AttributionLit.Statut.PROPOSEE,
+            AttributionLit.Statut.ACTIVE,
+            AttributionLit.Statut.A_REORGANISER,
+        ],
+        deleted_at__isnull=True,
+    )
+    affectations = (
+        base_affectations.annotate(
+            possede_groupe_ouvert=Exists(groupe_ouvert),
+            possede_lit_ouvert=Exists(lit_ouvert),
         )
-        if groupe_exige and not groupe_ouvert:
+        .select_related("session__parametres", "centre")
+        .iterator(chunk_size=taille_lot)
+    )
+    for affectation in affectations:
+        groupe_exige = (
+            affectation.session.statut == SessionImmersion.Statut.EN_COURS
+            or affectation.session.date_debut <= aujourd_hui + timedelta(days=1)
+        )
+        if groupe_exige and not affectation.possede_groupe_ouvert:
             yield Anomalie(
                 code="ORG_IMMERGE_SANS_GROUPE",
                 cle=f"ORG_IMMERGE_SANS_GROUPE:{affectation.id}",
                 titre="Immergé sans groupe",
-                description="L'affectation centre ne possède aucune affectation de groupe ouverte.",
+                description=(
+                    "L'affectation centre ne possède aucune affectation de groupe ouverte."
+                ),
                 categorie=AlerteIncident.Categorie.ORGANISATION,
                 gravite=AlerteIncident.NiveauGravite.CRITIQUE,
                 type_concerne=AlerteIncident.TypeConcerne.IMMERGE,
@@ -127,29 +172,26 @@ def detecter():
                 affectation_centre_id=affectation.id,
                 module_source="organisation",
                 modele_source="AffectationGroupe",
-                est_bloquante=affectation.session.statut == SessionImmersion.Statut.EN_COURS,
+                est_bloquante=(
+                    affectation.session.statut == SessionImmersion.Statut.EN_COURS
+                ),
             )
 
         parametres = getattr(affectation.session, "parametres", None)
         if parametres and parametres.hebergement_active:
-            lit_ouvert = AttributionLit.objects.filter(
-                affectation_centre_id=affectation.id,
-                statut__in=[
-                    AttributionLit.Statut.PROPOSEE,
-                    AttributionLit.Statut.ACTIVE,
-                    AttributionLit.Statut.A_REORGANISER,
-                ],
-                deleted_at__isnull=True,
-            ).exists()
-            lit_exige = affectation.session.statut == SessionImmersion.Statut.EN_COURS or (
-                affectation.session.date_debut <= aujourd_hui + timedelta(days=1)
+            lit_exige = (
+                affectation.session.statut == SessionImmersion.Statut.EN_COURS
+                or affectation.session.date_debut <= aujourd_hui + timedelta(days=1)
             )
-            if lit_exige and not lit_ouvert:
+            if lit_exige and not affectation.possede_lit_ouvert:
                 yield Anomalie(
                     code="ORG_IMMERGE_SANS_LIT",
                     cle=f"ORG_IMMERGE_SANS_LIT:{affectation.id}",
                     titre="Immergé sans lit",
-                    description="L'hébergement est actif mais aucune attribution de lit ouverte n'existe.",
+                    description=(
+                        "L'hébergement est actif mais aucune attribution de lit "
+                        "ouverte n'existe."
+                    ),
                     categorie=AlerteIncident.Categorie.ORGANISATION,
                     gravite=AlerteIncident.NiveauGravite.CRITIQUE,
                     type_concerne=AlerteIncident.TypeConcerne.IMMERGE,
@@ -158,13 +200,15 @@ def detecter():
                     affectation_centre_id=affectation.id,
                     module_source="organisation",
                     modele_source="AttributionLit",
-                    est_bloquante=affectation.session.statut == SessionImmersion.Statut.EN_COURS,
+                    est_bloquante=(
+                        affectation.session.statut == SessionImmersion.Statut.EN_COURS
+                    ),
                 )
 
     for affectation in AffectationGroupe.objects.filter(
         statut=AffectationGroupe.Statut.A_REORGANISER,
         deleted_at__isnull=True,
-    ).select_related("affectation_centre")[:limite]:
+    ).select_related("affectation_centre").iterator(chunk_size=taille_lot):
         ac = affectation.affectation_centre
         yield Anomalie(
             code="ORG_AFFECTATION_GROUPE_A_REORGANISER",
@@ -198,7 +242,7 @@ def detecter():
                 affectations__deleted_at__isnull=True,
             ),
         )
-    ).filter(effectif__gt=F("capacite_max")).select_related("section")[:limite]
+    ).filter(effectif__gt=F("capacite_max")).select_related("section").iterator(chunk_size=taille_lot)
     for groupe in groupes:
         yield Anomalie(
             code="ORG_GROUPE_SURCAPACITE",
@@ -232,7 +276,7 @@ def detecter():
                 groupes__affectations__deleted_at__isnull=True,
             ),
         )
-    ).filter(effectif__gt=F("capacite_max"))[:limite]
+    ).filter(effectif__gt=F("capacite_max")).iterator(chunk_size=taille_lot)
     for section in sections:
         yield Anomalie(
             code="ORG_SECTION_SURCAPACITE",
@@ -253,7 +297,7 @@ def detecter():
     for attribution in AttributionLit.objects.filter(
         statut=AttributionLit.Statut.A_REORGANISER,
         deleted_at__isnull=True,
-    ).select_related("affectation_centre")[:limite]:
+    ).select_related("affectation_centre").iterator(chunk_size=taille_lot):
         ac = attribution.affectation_centre
         yield Anomalie(
             code="ORG_ATTRIBUTION_LIT_A_REORGANISER",
@@ -275,7 +319,7 @@ def detecter():
     attributions = AttributionLit.objects.filter(
         statut__in=[AttributionLit.Statut.PROPOSEE, AttributionLit.Statut.ACTIVE],
         deleted_at__isnull=True,
-    ).select_related("lit__dortoir", "affectation_centre")[:limite]
+    ).select_related("lit__dortoir", "affectation_centre").iterator(chunk_size=taille_lot)
     for attribution in attributions:
         ac = attribution.affectation_centre
         lit = attribution.lit

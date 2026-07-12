@@ -27,8 +27,8 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def _seance_est_passee(seance, maintenant):
@@ -61,14 +61,14 @@ def _affectations_attendues_seance(seance):
 
 def detecter():
     maintenant = timezone.now()
-    limite = _limite()
+    taille_lot = _taille_lot()
     seances = Seance.objects.filter(
         session__statut__in=[
             SessionImmersion.Statut.EN_PREPARATION,
             SessionImmersion.Statut.EN_COURS,
         ],
         deleted_at__isnull=True,
-    ).select_related("session", "centre", "section", "groupe")[:limite]
+    ).select_related("session", "centre", "section", "groupe").iterator(chunk_size=taille_lot)
 
     for seance in seances:
         if seance.statut in {Seance.Statut.PLANIFIEE, Seance.Statut.EN_COURS} and not seance.formateur_id:
@@ -156,7 +156,7 @@ def detecter():
     evaluations = Evaluation.objects.filter(
         statut=Evaluation.Statut.CLOTUREE,
         deleted_at__isnull=True,
-    ).select_related("session__parametres", "seance")[:limite]
+    ).select_related("session__parametres", "seance").iterator(chunk_size=taille_lot)
     for evaluation in evaluations:
         parametres = getattr(evaluation.session, "parametres", None)
         if not parametres or not parametres.evaluation_active:
@@ -197,7 +197,7 @@ def detecter():
         valeur__isnull=False,
         valeur__gt=F("evaluation__bareme"),
         deleted_at__isnull=True,
-    ).select_related("evaluation", "affectation_centre")[:limite]:
+    ).select_related("evaluation", "affectation_centre").iterator(chunk_size=taille_lot):
         ac = note.affectation_centre
         yield Anomalie(
             code="ACT_NOTE_HORS_BAREME",
@@ -225,7 +225,7 @@ def detecter():
         )
         .values("affectation_centre_id")
         .annotate(total=Count("id"))
-        .filter(total__gte=3)[:limite]
+        .filter(total__gte=3).iterator(chunk_size=taille_lot)
     )
     for ligne in repetitions:
         ac = AffectationCentre.objects.filter(id=ligne["affectation_centre_id"]).first()

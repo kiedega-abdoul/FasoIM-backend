@@ -22,6 +22,10 @@ class AlerteIncidentSerializer(serializers.ModelSerializer):
     categorie_libelle = serializers.CharField(source="get_categorie_display", read_only=True)
     niveau_gravite_libelle = serializers.CharField(source="get_niveau_gravite_display", read_only=True)
     statut_libelle = serializers.CharField(source="get_statut_display", read_only=True)
+    niveau_confidentialite_libelle = serializers.CharField(
+        source="get_niveau_confidentialite_display",
+        read_only=True,
+    )
     cree_par_resume = ActeurIncidentResumeSerializer(source="cree_par", read_only=True, allow_null=True)
     traite_par_resume = ActeurIncidentResumeSerializer(source="traite_par", read_only=True, allow_null=True)
     concerne = serializers.SerializerMethodField()
@@ -33,6 +37,7 @@ class AlerteIncidentSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "session",
+            "region",
             "centre",
             "affectation_centre",
             "acteur_concerne",
@@ -51,6 +56,8 @@ class AlerteIncidentSerializer(serializers.ModelSerializer):
             "niveau_gravite_libelle",
             "statut",
             "statut_libelle",
+            "niveau_confidentialite",
+            "niveau_confidentialite_libelle",
             "code_detection",
             "module_source",
             "modele_source",
@@ -76,20 +83,39 @@ class AlerteIncidentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def _peut_lire_sante(self, obj):
+    def _peut_lire_description(self, obj):
         request = self.context.get("request")
         acteur = getattr(request, "user", None)
         if not acteur or not getattr(acteur, "is_authenticated", False):
             return False
-        if getattr(acteur, "is_superuser", False) or obj.cree_par_id == getattr(acteur, "id", None):
+        if (
+            getattr(acteur, "is_superuser", False)
+            or obj.cree_par_id == getattr(acteur, "id", None)
+            or obj.traite_par_id == getattr(acteur, "id", None)
+        ):
             return True
-        resultat = ControleAccesService.acteur_peut(
-            acteur,
-            "consulter_visites_medicales",
-            session_id=obj.session_id,
-            centre_id=obj.centre_id,
+        if obj.niveau_confidentialite == AlerteIncident.Confidentialite.NORMALE:
+            return True
+
+        region_code = None
+        if obj.region_id and obj.region:
+            region_code = obj.region.code
+        elif obj.centre_id and obj.centre:
+            region_code = obj.centre.region.code
+
+        permissions = ["prendre_en_charge_incident"]
+        if obj.niveau_confidentialite == AlerteIncident.Confidentialite.MEDICALE:
+            permissions.append("consulter_visites_medicales")
+        return any(
+            ControleAccesService.acteur_peut(
+                acteur,
+                code,
+                session_id=obj.session_id,
+                centre_id=obj.centre_id,
+                region_code=region_code,
+            ).autorise
+            for code in permissions
         )
-        return resultat.autorise
 
 
     def _peut_lire_technique(self, obj):
@@ -121,12 +147,10 @@ class AlerteIncidentSerializer(serializers.ModelSerializer):
         return donnees
 
     def get_description(self, obj):
-        if (
-            obj.categorie == AlerteIncident.Categorie.SANTE
-            and obj.origine == AlerteIncident.Origine.MANUELLE
-            and not self._peut_lire_sante(obj)
-        ):
-            return "Incident de santé signalé. Détails réservés aux acteurs autorisés."
+        if not self._peut_lire_description(obj):
+            if obj.niveau_confidentialite == AlerteIncident.Confidentialite.MEDICALE:
+                return "Incident de santé signalé. Détails réservés aux acteurs autorisés."
+            return "Incident signalé. Détails réservés aux acteurs autorisés."
         return obj.description
 
     def get_contexte(self, obj):
@@ -251,6 +275,7 @@ class ResolutionIncidentSerializer(serializers.Serializer):
 
 class FiltreIncidentSerializer(serializers.Serializer):
     session_id = serializers.IntegerField(required=False, min_value=1)
+    region_id = serializers.IntegerField(required=False, min_value=1)
     centre_id = serializers.IntegerField(required=False, min_value=1)
     categorie = serializers.ChoiceField(choices=AlerteIncident.Categorie.choices, required=False)
     niveau_gravite = serializers.ChoiceField(
@@ -269,6 +294,7 @@ class FiltreIncidentSerializer(serializers.Serializer):
 
 class StatistiquesIncidentQuerySerializer(serializers.Serializer):
     session_id = serializers.IntegerField(required=False, min_value=1)
+    region_id = serializers.IntegerField(required=False, min_value=1)
     centre_id = serializers.IntegerField(required=False, min_value=1)
 
 

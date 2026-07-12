@@ -30,8 +30,8 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def _date_heure_repas(repas):
@@ -44,7 +44,7 @@ def _date_heure_repas(repas):
 
 def detecter():
     maintenant = timezone.now()
-    limite = _limite()
+    taille_lot = _taille_lot()
 
     lignes = LigneBesoinDenree.objects.filter(
         demande_ravitaillement__statut__in=[
@@ -60,7 +60,7 @@ def detecter():
         ],
         quantite_recue__lt=F("quantite_validee"),
         deleted_at__isnull=True,
-    ).select_related("demande_ravitaillement")[:limite]
+    ).select_related("demande_ravitaillement").iterator(chunk_size=taille_lot)
     for ligne in lignes:
         demande = ligne.demande_ravitaillement
         yield Anomalie(
@@ -87,7 +87,7 @@ def detecter():
         demande_ravitaillement__session__parametres__repas_active=True,
         demande_ravitaillement__deleted_at__isnull=True,
         deleted_at__isnull=True,
-    ).select_related("demande_ravitaillement")[:limite]
+    ).select_related("demande_ravitaillement").iterator(chunk_size=taille_lot)
     for repas in repas_qs:
         heure = _date_heure_repas(repas)
         passe = heure < maintenant
@@ -211,7 +211,7 @@ def detecter():
             SuiviRepas.StatutService.NON_SERVI,
         ],
         deleted_at__isnull=True,
-    ).select_related("repas_journalier__demande_ravitaillement", "affectation_centre")[:limite]
+    ).select_related("repas_journalier__demande_ravitaillement", "affectation_centre").iterator(chunk_size=taille_lot)
     for suivi in suivis:
         repas = suivi.repas_journalier
         yield Anomalie(

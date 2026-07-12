@@ -34,8 +34,8 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def _anomalie_source(source, type_immerge):
@@ -58,7 +58,7 @@ def _anomalie_source(source, type_immerge):
 
 def detecter():
     aujourd_hui = timezone.localdate()
-    limite = _limite()
+    taille_lot = _taille_lot()
 
     sources = (
         (
@@ -85,7 +85,7 @@ def detecter():
             import_officiel__deleted_at__isnull=True,
             deleted_at__isnull=True,
         )
-        for source in qs.select_related("import_officiel")[:limite]:
+        for source in qs.select_related("import_officiel").iterator(chunk_size=taille_lot):
             type_immerge = types_immerge[0]
             if isinstance(source, ImmergeExamen):
                 type_immerge = (
@@ -105,7 +105,7 @@ def detecter():
     volontaires = InscriptionVolontaire.objects.filter(
         statut_demande=InscriptionVolontaire.StatutDemande.ACCEPTEE,
         deleted_at__isnull=True,
-    ).select_related("session")[:limite]
+    ).select_related("session").iterator(chunk_size=taille_lot)
     for source in volontaires:
         if not Immerge.objects.filter(
             session_id=source.session_id,
@@ -135,7 +135,7 @@ def detecter():
         Immerge.TypeImmerge.SELECTIONNE: ImmergeSelectionne,
         Immerge.TypeImmerge.VOLONTAIRE: InscriptionVolontaire,
     }
-    for immerge in Immerge.objects.filter(deleted_at__isnull=True).select_related("session")[:limite]:
+    for immerge in Immerge.objects.filter(deleted_at__isnull=True).select_related("session").iterator(chunk_size=taille_lot):
         modele_source = mapping.get(immerge.type_immerge)
         source_existe = bool(modele_source and modele_source.objects.filter(
             id=immerge.origine_id,

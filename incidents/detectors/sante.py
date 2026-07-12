@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 
 from affectations.models import AffectationCentre
@@ -26,31 +26,36 @@ CODES = (
 )
 
 
-def _limite():
-    return int(getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500))
+def _taille_lot():
+    return int(getattr(settings, "INCIDENTS_TAILLE_LOT_SCAN", getattr(settings, "INCIDENTS_MAX_ANOMALIES_PAR_REGLE", 500)))
 
 
 def detecter():
     maintenant = timezone.now()
     aujourd_hui = timezone.localdate()
-    limite = _limite()
+    taille_lot = _taille_lot()
 
-    affectations = AffectationCentre.objects.filter(
-        statut=AffectationCentre.Statut.ACTIVE,
+    visite_courante = VisiteMedicale.objects.filter(
+        affectation_centre_id=OuterRef("pk"),
+        est_courante=True,
+        statut__in=[VisiteMedicale.Statut.BROUILLON, VisiteMedicale.Statut.VALIDEE],
         deleted_at__isnull=True,
-        session__statut=SessionImmersion.Statut.EN_COURS,
-        session__deleted_at__isnull=True,
-        session__parametres__visite_medicale_active=True,
-        session__parametres__deleted_at__isnull=True,
-    ).select_related("session", "centre")[:limite]
-    for affectation in affectations:
-        existe = VisiteMedicale.objects.filter(
-            affectation_centre_id=affectation.id,
-            est_courante=True,
-            statut__in=[VisiteMedicale.Statut.BROUILLON, VisiteMedicale.Statut.VALIDEE],
+    )
+    affectations = (
+        AffectationCentre.objects.filter(
+            statut=AffectationCentre.Statut.ACTIVE,
             deleted_at__isnull=True,
-        ).exists()
-        if not existe:
+            session__statut=SessionImmersion.Statut.EN_COURS,
+            session__deleted_at__isnull=True,
+            session__parametres__visite_medicale_active=True,
+            session__parametres__deleted_at__isnull=True,
+        )
+        .annotate(possede_visite_courante=Exists(visite_courante))
+        .select_related("session", "centre")
+        .iterator(chunk_size=taille_lot)
+    )
+    for affectation in affectations:
+        if not affectation.possede_visite_courante:
             yield Anomalie(
                 code="SAN_VISITE_OBLIGATOIRE_ABSENTE",
                 cle=f"SAN_VISITE_OBLIGATOIRE_ABSENTE:{affectation.id}",
@@ -75,12 +80,16 @@ def detecter():
             est_courante=True,
             deleted_at__isnull=True,
         )
-        .values("affectation_centre_id")
+        .values(
+            "affectation_centre_id",
+            "affectation_centre__session_id",
+            "affectation_centre__centre_id",
+        )
         .annotate(total=Count("id"))
-        .filter(total__gt=1)[:limite]
+        .filter(total__gt=1)
+        .iterator(chunk_size=taille_lot)
     )
     for ligne in multiples:
-        ac = AffectationCentre.objects.filter(id=ligne["affectation_centre_id"]).first()
         yield Anomalie(
             code="SAN_VISITE_COURANTE_MULTIPLE",
             cle=f"SAN_VISITE_COURANTE_MULTIPLE:{ligne['affectation_centre_id']}",
@@ -89,9 +98,9 @@ def detecter():
             categorie=AlerteIncident.Categorie.SANTE,
             gravite=AlerteIncident.NiveauGravite.CRITIQUE,
             type_concerne=AlerteIncident.TypeConcerne.IMMERGE,
-            session_id=ac.session_id if ac else None,
-            centre_id=ac.centre_id if ac else None,
-            affectation_centre_id=ac.id if ac else None,
+            session_id=ligne["affectation_centre__session_id"],
+            centre_id=ligne["affectation_centre__centre_id"],
+            affectation_centre_id=ligne["affectation_centre_id"],
             module_source="sante",
             modele_source="VisiteMedicale",
             est_bloquante=True,
@@ -107,7 +116,7 @@ def detecter():
         ],
         updated_at__lt=retard,
         deleted_at__isnull=True,
-    ).select_related("affectation_centre")[:limite]
+    ).select_related("affectation_centre").iterator(chunk_size=taille_lot)
     for visite in visites_retard:
         ac = visite.affectation_centre
         yield Anomalie(
@@ -133,7 +142,7 @@ def detecter():
     for visite in VisiteMedicale.objects.filter(
         statut_application=VisiteMedicale.StatutApplication.ECHEC,
         deleted_at__isnull=True,
-    ).select_related("affectation_centre")[:limite]:
+    ).select_related("affectation_centre").iterator(chunk_size=taille_lot):
         yield Anomalie(
             code="SAN_APPLICATION_RESULTAT_ECHEC",
             cle=f"SAN_APPLICATION_RESULTAT_ECHEC:{visite.id}",
@@ -158,7 +167,7 @@ def detecter():
         statut=RestrictionMedicale.Statut.ACTIVE,
         date_fin__lt=aujourd_hui,
         deleted_at__isnull=True,
-    ).select_related("visite_medicale")[:limite]:
+    ).select_related("visite_medicale").iterator(chunk_size=taille_lot):
         visite = restriction.visite_medicale
         yield Anomalie(
             code="SAN_RESTRICTION_EXPIREE_ACTIVE",
@@ -180,7 +189,7 @@ def detecter():
         statut=RestrictionMedicale.Statut.ACTIVE,
         consigne_operationnelle="",
         deleted_at__isnull=True,
-    ).select_related("visite_medicale")[:limite]:
+    ).select_related("visite_medicale").iterator(chunk_size=taille_lot):
         visite = restriction.visite_medicale
         yield Anomalie(
             code="SAN_RESTRICTION_SANS_CONSIGNE",
@@ -204,7 +213,7 @@ def detecter():
 
     visites = VisiteMedicale.objects.filter(deleted_at__isnull=True).select_related(
         "affectation_centre"
-    )[:limite]
+    ).iterator(chunk_size=taille_lot)
     for visite in visites:
         ac = visite.affectation_centre
         if visite.session_id != ac.session_id or visite.centre_id != ac.centre_id:
