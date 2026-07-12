@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import date
+import re
+import unicodedata
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -302,6 +304,121 @@ class ImpactMedicalService:
         valeur
         for valeur, _ in RestrictionMedicale.ModuleConcerne.choices
     ]
+
+    @staticmethod
+    def _code_consigne_alimentaire(libelle):
+        texte = unicodedata.normalize("NFKD", str(libelle or ""))
+        texte = "".join(
+            caractere for caractere in texte
+            if not unicodedata.combining(caractere)
+        )
+        texte = re.sub(r"[^A-Za-z0-9]+", "_", texte).strip("_").upper()
+        return texte[:80] or "AUTRE_ADAPTATION"
+
+    @staticmethod
+    def besoins_repas_pour_date(*, session_id, centre_id, date_reference):
+        """Retourne en une requête groupée les seules consignes alimentaires.
+
+        Aucune observation médicale, maladie ou description confidentielle
+        n'est exposée au module repas.
+        """
+
+        from organisation.models import AffectationGroupe
+
+        restrictions = list(
+            RestrictionMedicaleRepository.applicables(date_reference)
+            .filter(
+                visite_medicale__session_id=session_id,
+                visite_medicale__centre_id=centre_id,
+            )
+            .order_by(
+                "visite_medicale__affectation_centre_id",
+                "date_debut",
+                "id",
+            )
+        )
+        restrictions = [
+            restriction for restriction in restrictions
+            if RestrictionMedicale.ModuleConcerne.REPAS
+            in (restriction.modules_concernes or [])
+        ]
+
+        affectation_ids = {
+            restriction.visite_medicale.affectation_centre_id
+            for restriction in restrictions
+        }
+        groupes = {
+            ligne["affectation_centre_id"]: {
+                "id": ligne["groupe_id"],
+                "code": ligne["groupe__code"],
+                "nom": ligne["groupe__nom"],
+            }
+            for ligne in AffectationGroupe.objects.filter(
+                affectation_centre_id__in=affectation_ids,
+                statut=AffectationGroupe.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            ).values(
+                "affectation_centre_id",
+                "groupe_id",
+                "groupe__code",
+                "groupe__nom",
+            )
+        }
+
+        personnes = {}
+        synthese = {}
+        categories_comptees = set()
+        for restriction in restrictions:
+            affectation = restriction.visite_medicale.affectation_centre
+            immerge = affectation.immerge
+            categorie = ImpactMedicalService._code_consigne_alimentaire(
+                restriction.libelle
+            )
+            cle_comptage = (affectation.id, categorie)
+            if cle_comptage not in categories_comptees:
+                synthese[categorie] = synthese.get(categorie, 0) + 1
+                categories_comptees.add(cle_comptage)
+
+            personne = personnes.setdefault(
+                affectation.id,
+                {
+                    "affectation_centre_id": affectation.id,
+                    "code_fasoim": immerge.code_fasoim,
+                    "groupe": groupes.get(affectation.id),
+                    "categories": [],
+                    "consignes": [],
+                    "date_debut": restriction.date_debut.isoformat(),
+                    "date_fin": (
+                        restriction.date_fin.isoformat()
+                        if restriction.date_fin else None
+                    ),
+                },
+            )
+            if categorie not in personne["categories"]:
+                personne["categories"].append(categorie)
+            consigne = restriction.consigne_operationnelle.strip()
+            if consigne and consigne not in personne["consignes"]:
+                personne["consignes"].append(consigne)
+            if restriction.date_debut.isoformat() < personne["date_debut"]:
+                personne["date_debut"] = restriction.date_debut.isoformat()
+            if restriction.date_fin is None:
+                personne["date_fin"] = None
+            elif personne["date_fin"] is not None:
+                personne["date_fin"] = max(
+                    personne["date_fin"], restriction.date_fin.isoformat()
+                )
+
+        resultat_personnes = []
+        for personne in personnes.values():
+            personne["categorie"] = ",".join(personne["categories"])
+            personne["consigne"] = " ; ".join(personne["consignes"])
+            resultat_personnes.append(personne)
+
+        return {
+            "total_concernes": len(resultat_personnes),
+            "synthese": dict(sorted(synthese.items())),
+            "personnes": resultat_personnes,
+        }
 
     @staticmethod
     def decision_pour_module(

@@ -320,6 +320,38 @@ PERMISSIONS_SYSTEME = [
     # Activités - opérations massives
     PermissionDefinition("consulter_progression_activites", "Consulter la progression des activités", "activites", "Consulter dans Redis la progression d'une opération massive."),
 
+    # Repas - ravitaillement des centres
+    PermissionDefinition("consulter_demandes_ravitaillement", "Consulter les demandes de ravitaillement", "repas", "Consulter les demandes et les denrées selon le périmètre autorisé."),
+    PermissionDefinition("creer_demande_ravitaillement", "Créer une demande de ravitaillement", "repas", "Créer le dossier de besoins en denrées d'un centre."),
+    PermissionDefinition("modifier_demande_ravitaillement", "Modifier une demande de ravitaillement", "repas", "Modifier le brouillon et ses lignes de denrées."),
+    PermissionDefinition("soumettre_demande_ravitaillement", "Soumettre une demande de ravitaillement", "repas", "Soumettre les besoins du centre à la validation."),
+    PermissionDefinition("valider_demande_ravitaillement", "Valider une demande de ravitaillement", "repas", "Valider les quantités demandées par un centre."),
+    PermissionDefinition("enregistrer_reception_denrees", "Enregistrer la réception des denrées", "repas", "Saisir les quantités réellement reçues au centre."),
+    PermissionDefinition("consolider_besoins_denrees", "Consolider les besoins en denrées", "repas", "Consolider par session ou région les demandes des centres."),
+
+    # Repas - planification et préparation
+    PermissionDefinition("consulter_repas", "Consulter les repas", "repas", "Consulter les repas journaliers selon le périmètre."),
+    PermissionDefinition("planifier_repas", "Planifier un repas", "repas", "Créer et planifier un repas journalier du centre."),
+    PermissionDefinition("modifier_repas", "Modifier un repas", "repas", "Modifier la planification ou renseigner la préparation réelle."),
+    PermissionDefinition("annuler_repas", "Annuler un repas", "repas", "Annuler un repas non clôturé avec un motif."),
+    PermissionDefinition("calculer_portions_repas", "Calculer les portions d'un repas", "repas", "Calculer l'effectif standard et les besoins alimentaires spéciaux."),
+    PermissionDefinition("ouvrir_distribution_repas", "Ouvrir une distribution de repas", "repas", "Préparer les comptages puis ouvrir la distribution."),
+    PermissionDefinition("cloturer_distribution_repas", "Clôturer une distribution de repas", "repas", "Contrôler la complétude et clôturer la distribution."),
+
+    # Repas - comptage et suivi alimentaire
+    PermissionDefinition("pointer_repas", "Pointer un repas", "repas", "Saisir le comptage ou le service d'un repas adapté."),
+    PermissionDefinition("modifier_pointage_repas", "Modifier un pointage de repas", "repas", "Corriger un suivi tant que la distribution reste ouverte."),
+    PermissionDefinition("marquer_repas_servi", "Marquer un repas servi", "repas", "Marquer le service d'un repas standard."),
+    PermissionDefinition("marquer_repas_absent", "Marquer une absence au repas", "repas", "Marquer absent un immergé suivi pour un repas adapté."),
+    PermissionDefinition("marquer_repas_refuse", "Marquer un repas refusé", "repas", "Enregistrer le refus d'un repas adapté."),
+    PermissionDefinition("marquer_repas_dispense", "Marquer une dispense de repas", "repas", "Enregistrer une dispense opérationnelle lorsqu'elle est applicable."),
+    PermissionDefinition("marquer_regime_special", "Marquer un régime spécial", "repas", "Confirmer la conformité ou la non-conformité du repas adapté."),
+    PermissionDefinition("consulter_pointages_repas", "Consulter les suivis de repas", "repas", "Consulter les comptages et consignes alimentaires non confidentielles."),
+
+    # Repas - rapports et opérations massives
+    PermissionDefinition("generer_rapport_repas", "Générer un rapport de repas", "repas", "Préparer les indicateurs d'un rapport repas par périmètre et période."),
+    PermissionDefinition("consulter_progression_repas", "Consulter la progression des repas", "repas", "Consulter dans Redis la progression d'une opération massive."),
+
 
 
 ]
