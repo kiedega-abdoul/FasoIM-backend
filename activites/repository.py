@@ -158,7 +158,7 @@ class SeanceRepository:
     @classmethod
     def get_by_id_pour_update(cls, seance_id: int):
         return (
-            Seance.objects.select_for_update()
+            Seance.objects.select_for_update(of=("self",))
             .select_related(
                 "module_activite",
                 "session",
@@ -531,7 +531,7 @@ class PresenceRepository:
     @classmethod
     def get_by_id_pour_update(cls, presence_id: int):
         return (
-            Presence.objects.select_for_update()
+            Presence.objects.select_for_update(of=("self",))
             .select_related(
                 "seance",
                 "seance__module_activite",
@@ -774,7 +774,7 @@ class EvaluationRepository:
     @classmethod
     def get_by_id_pour_update(cls, evaluation_id: int):
         return (
-            Evaluation.objects.select_for_update()
+            Evaluation.objects.select_for_update(of=("self",))
             .select_related(
                 "session",
                 "session__parametres",
@@ -898,7 +898,7 @@ class NoteRepository:
     @classmethod
     def get_by_id_pour_update(cls, note_id: int):
         return (
-            Note.objects.select_for_update()
+            Note.objects.select_for_update(of=("self",))
             .select_related(
                 "evaluation",
                 "evaluation__session",
