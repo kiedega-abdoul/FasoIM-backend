@@ -3,7 +3,7 @@
 Cette commande insère :
 - les permissions système déjà codées dans le backend ;
 - les rôles système de base ;
-- les associations minimales du module incidents aux rôles système.
+- les associations minimales des modules incidents et audit aux rôles système.
 """
 
 from __future__ import annotations
@@ -361,6 +361,15 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("escalader_incident", "Escalader un incident", "incidents", "Augmenter le niveau d'urgence et le périmètre de traitement."),
     PermissionDefinition("consulter_incidents", "Consulter les incidents", "incidents", "Consulter les alertes et incidents selon le périmètre autorisé."),
     PermissionDefinition("generer_alerte_automatique", "Générer les alertes automatiques", "incidents", "Lancer ou superviser les scans automatiques d'intégrité."),
+
+    # Audit et traçabilité
+    PermissionDefinition("consulter_journaux_audit", "Consulter les journaux d'audit", "audit", "Consulter les actions selon le périmètre autorisé."),
+    PermissionDefinition("consulter_statistiques_audit", "Consulter les statistiques d'audit", "audit", "Consulter les statistiques des acteurs, immergés, documents et du système."),
+    PermissionDefinition("consulter_audit_securite", "Consulter les détails de sécurité de l'audit", "audit", "Consulter IP, user-agent, chemins techniques et identifiants de tâches."),
+    PermissionDefinition("consulter_audit_acces_publics", "Consulter les accès publics audités", "audit", "Consulter les recherches, consultations et téléchargements des immergés."),
+    PermissionDefinition("exporter_journaux_audit", "Exporter les journaux d'audit", "audit", "Générer et télécharger un export filtré des journaux autorisés."),
+    PermissionDefinition("consulter_activite_acteur", "Consulter l'activité d'un acteur", "audit", "Consulter les actions d'un acteur selon le périmètre autorisé."),
+    PermissionDefinition("consulter_activite_immerge", "Consulter l'activité d'un immergé", "audit", "Consulter les informations reçues et les consultations d'un immergé."),
 ]
 
 
@@ -474,8 +483,45 @@ PERMISSIONS_INCIDENTS_PAR_ROLE = {
 }
 
 
+PERMISSIONS_AUDIT_PAR_ROLE = {
+    "ADMINISTRATEUR": {
+        "consulter_journaux_audit",
+        "consulter_statistiques_audit",
+        "consulter_audit_securite",
+        "consulter_audit_acces_publics",
+        "exporter_journaux_audit",
+        "consulter_activite_acteur",
+        "consulter_activite_immerge",
+    },
+    "DGAS": {
+        "consulter_journaux_audit",
+        "consulter_statistiques_audit",
+        "consulter_audit_securite",
+        "consulter_audit_acces_publics",
+        "exporter_journaux_audit",
+        "consulter_activite_acteur",
+        "consulter_activite_immerge",
+    },
+    "DIRECTEUR_REGIONAL": {
+        "consulter_journaux_audit",
+        "consulter_statistiques_audit",
+        "consulter_audit_acces_publics",
+        "exporter_journaux_audit",
+        "consulter_activite_acteur",
+        "consulter_activite_immerge",
+    },
+    "RESPONSABLE_CENTRE": {
+        "consulter_journaux_audit",
+        "consulter_statistiques_audit",
+        "consulter_audit_acces_publics",
+        "exporter_journaux_audit",
+        "consulter_activite_immerge",
+    },
+}
+
+
 class Command(BaseCommand):
-    help = "Initialise les permissions, les rôles de base et les droits incidents FasoIM."
+    help = "Initialise les permissions, les rôles de base et les droits incidents/audit FasoIM."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -500,6 +546,8 @@ class Command(BaseCommand):
         roles_mis_a_jour = 0
         associations_incidents_creees = 0
         associations_incidents_mises_a_jour = 0
+        associations_audit_creees = 0
+        associations_audit_mises_a_jour = 0
 
         permission_obsolete = Permission.objects.filter(
             code="creer_alerte",
@@ -576,6 +624,31 @@ class Command(BaseCommand):
                 else:
                     associations_incidents_mises_a_jour += 1
 
+        for code_role, codes_permissions in PERMISSIONS_AUDIT_PAR_ROLE.items():
+            role = Role.objects.get(code=code_role, deleted_at__isnull=True)
+            permissions = Permission.objects.filter(
+                code__in=codes_permissions,
+                module="audit",
+                statut=Permission.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            )
+            for permission in permissions:
+                _, created = RolePermission.objects.update_or_create(
+                    role=role,
+                    permission=permission,
+                    deleted_at__isnull=True,
+                    defaults={
+                        "est_delegable": False,
+                        "perimetre_delegation_max": role.perimetre_autorise,
+                        "statut": RolePermission.Statut.ACTIVE,
+                        "deleted_at": None,
+                    },
+                )
+                if created:
+                    associations_audit_creees += 1
+                else:
+                    associations_audit_mises_a_jour += 1
+
         self.stdout.write(self.style.SUCCESS("Initialisation accounts terminée."))
         self.stdout.write(f"Permissions créées : {permissions_creees}")
         self.stdout.write(f"Permissions mises à jour : {permissions_mises_a_jour}")
@@ -587,4 +660,11 @@ class Command(BaseCommand):
         self.stdout.write(
             "Associations incidents mises à jour : "
             f"{associations_incidents_mises_a_jour}"
+        )
+        self.stdout.write(
+            f"Associations audit créées : {associations_audit_creees}"
+        )
+        self.stdout.write(
+            "Associations audit mises à jour : "
+            f"{associations_audit_mises_a_jour}"
         )

@@ -31,6 +31,7 @@ urlpatterns = [
     path("api/activites/", include("activites.urls")),
     path("api/repas/", include("repas.urls")),
     path("api/incidents/", include("incidents.urls")),
+    path("api/audit/", include("audit.urls")),
 
     # Auth JWT
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
