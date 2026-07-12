@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import timedelta
 from decouple import config, Csv
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -160,3 +161,33 @@ EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
 EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="FasoIM <noreply@fasoim.local>")
+
+# Surveillance automatique des alertes et incidents
+# Celery Beat doit être lancé séparément. Les tâches restent sans effet sur les
+# validations métier : elles observent uniquement l'état persistant du système.
+INCIDENTS_MAX_ANOMALIES_PAR_REGLE = config(
+    "INCIDENTS_MAX_ANOMALIES_PAR_REGLE",
+    default=500,
+    cast=int,
+)
+INCIDENTS_SCAN_DEBOUNCE_SECONDS = config(
+    "INCIDENTS_SCAN_DEBOUNCE_SECONDS",
+    default=30,
+    cast=int,
+)
+INCIDENTS_CONTROLES_CIBLES_ACTIFS = config(
+    "INCIDENTS_CONTROLES_CIBLES_ACTIFS",
+    default=True,
+    cast=bool,
+)
+
+CELERY_BEAT_SCHEDULE = {
+    "incidents-scan-integrite-toutes-les-5-minutes": {
+        "task": "incidents.scanner_integrite_global",
+        "schedule": crontab(minute="*/5"),
+    },
+    "incidents-escalade-toutes-les-5-minutes": {
+        "task": "incidents.escalader_retards",
+        "schedule": crontab(minute="*/5"),
+    },
+}

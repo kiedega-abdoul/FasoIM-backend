@@ -352,9 +352,20 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("generer_rapport_repas", "Générer un rapport de repas", "repas", "Préparer les indicateurs d'un rapport repas par périmètre et période."),
     PermissionDefinition("consulter_progression_repas", "Consulter la progression des repas", "repas", "Consulter dans Redis la progression d'une opération massive."),
 
-
-
+    # Alertes et incidents
+    PermissionDefinition("creer_alerte", "Créer une alerte", "incidents", "Créer une alerte technique ou opérationnelle depuis un service autorisé."),
+    PermissionDefinition("signaler_incident", "Signaler un incident", "incidents", "Signaler rapidement un incident dans son périmètre."),
+    PermissionDefinition("modifier_incident", "Modifier un incident", "incidents", "Corriger un signalement manuel encore nouveau."),
+    PermissionDefinition("prendre_en_charge_incident", "Prendre en charge un incident", "incidents", "Prendre en charge une alerte ou un incident ouvert."),
+    PermissionDefinition("mettre_incident_en_attente", "Mettre un incident en attente", "incidents", "Mettre en attente un incident en cours avec un motif."),
+    PermissionDefinition("resoudre_incident", "Résoudre un incident", "incidents", "Enregistrer la résolution d'un incident ouvert."),
+    PermissionDefinition("cloturer_incident", "Clôturer un incident", "incidents", "Clôturer un incident déjà résolu."),
+    PermissionDefinition("annuler_incident", "Annuler un incident", "incidents", "Annuler un signalement avec un motif."),
+    PermissionDefinition("escalader_incident", "Escalader un incident", "incidents", "Augmenter le niveau d'urgence et le périmètre de traitement."),
+    PermissionDefinition("consulter_incidents", "Consulter les incidents", "incidents", "Consulter les alertes et incidents selon le périmètre autorisé."),
+    PermissionDefinition("generer_alerte_automatique", "Générer les alertes automatiques", "incidents", "Lancer ou superviser les scans automatiques d'intégrité."),
 ]
+
 
 
 ROLES_SYSTEME = [
