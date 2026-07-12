@@ -275,6 +275,51 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("annuler_remises_kit_masse", "Annuler les remises en masse", "kits", "Annuler logiquement un lot de remises avec Celery."),
     PermissionDefinition("consulter_progression_kits", "Consulter la progression des kits", "kits", "Consulter dans Redis la progression d'une opération massive de kits."),
 
+    # Activités - catalogue
+    PermissionDefinition("consulter_activites", "Consulter les activités", "activites", "Consulter le catalogue permanent des activités."),
+    PermissionDefinition("creer_activite", "Créer une activité", "activites", "Créer une activité réutilisable dans le catalogue."),
+    PermissionDefinition("modifier_activite", "Modifier une activité", "activites", "Modifier une activité du catalogue."),
+    PermissionDefinition("desactiver_activite", "Désactiver une activité", "activites", "Désactiver, réactiver ou supprimer logiquement une activité."),
+
+    # Activités - séances
+    PermissionDefinition("consulter_seances", "Consulter les séances", "activites", "Consulter le planning des séances selon le périmètre autorisé."),
+    PermissionDefinition("planifier_seance", "Planifier une séance", "activites", "Programmer une activité dans une session et un centre."),
+    PermissionDefinition("modifier_seance", "Modifier une séance", "activites", "Modifier une séance encore modifiable."),
+    PermissionDefinition("annuler_seance", "Annuler une séance", "activites", "Annuler une séance en conservant son historique."),
+    PermissionDefinition("reporter_seance", "Reporter une séance", "activites", "Reporter une séance et créer sa nouvelle planification."),
+    PermissionDefinition("affecter_formateur_seance", "Affecter un formateur", "activites", "Affecter ou remplacer le formateur d'une séance."),
+
+    # Activités - présences
+    PermissionDefinition("consulter_presences", "Consulter les présences", "activites", "Consulter les feuilles et les présences selon le périmètre."),
+    PermissionDefinition("ouvrir_feuille_presence", "Ouvrir une feuille de présence", "activites", "Ouvrir et préparer une feuille de présence."),
+    PermissionDefinition("saisir_presence", "Saisir une présence", "activites", "Saisir une présence individuelle ou en masse."),
+    PermissionDefinition("modifier_presence", "Modifier une présence", "activites", "Corriger une présence sur une feuille ouverte."),
+    PermissionDefinition("valider_presence", "Valider une feuille de présence", "activites", "Valider une feuille de présence complète."),
+    PermissionDefinition("cloturer_feuille_presence", "Clôturer une feuille de présence", "activites", "Clôturer définitivement une feuille déjà validée."),
+    PermissionDefinition("calculer_taux_presence", "Calculer le taux de présence", "activites", "Calculer le taux de présence utilisé pour l'attestation."),
+
+    # Activités - évaluations
+    PermissionDefinition("consulter_evaluations", "Consulter les évaluations", "activites", "Consulter les évaluations selon le périmètre autorisé."),
+    PermissionDefinition("creer_evaluation", "Créer une évaluation", "activites", "Créer une évaluation en brouillon."),
+    PermissionDefinition("modifier_evaluation", "Modifier une évaluation", "activites", "Modifier une évaluation encore en brouillon."),
+    PermissionDefinition("ouvrir_saisie_notes", "Ouvrir la saisie des notes", "activites", "Ouvrir une évaluation pour la saisie des notes."),
+    PermissionDefinition("cloturer_evaluation", "Clôturer une évaluation", "activites", "Clôturer une évaluation ouverte."),
+    PermissionDefinition("annuler_evaluation", "Annuler une évaluation", "activites", "Annuler une évaluation non clôturée."),
+    PermissionDefinition("consulter_resultats", "Consulter les résultats", "activites", "Consulter les notes et statistiques d'une évaluation."),
+    PermissionDefinition("valider_resultats", "Valider les résultats", "activites", "Vérifier la complétude puis clôturer les résultats."),
+
+    # Activités - notes
+    PermissionDefinition("consulter_notes", "Consulter les notes", "activites", "Consulter les notes selon le périmètre autorisé."),
+    PermissionDefinition("saisir_note", "Saisir une note", "activites", "Saisir une note individuelle ou en masse."),
+    PermissionDefinition("modifier_note", "Modifier une note", "activites", "Corriger une note lorsque l'évaluation est ouverte."),
+    PermissionDefinition("marquer_absence_note", "Marquer une absence à une évaluation", "activites", "Enregistrer l'absence d'un immergé à une évaluation."),
+    PermissionDefinition("marquer_dispense_note", "Marquer une dispense d'évaluation", "activites", "Enregistrer une dispense médicale ou autorisée."),
+    PermissionDefinition("annuler_note", "Annuler une note", "activites", "Annuler une note en conservant son historique."),
+    PermissionDefinition("calculer_moyenne", "Calculer une moyenne", "activites", "Calculer la moyenne pondérée d'un immergé."),
+
+    # Activités - opérations massives
+    PermissionDefinition("consulter_progression_activites", "Consulter la progression des activités", "activites", "Consulter dans Redis la progression d'une opération massive."),
+
 
 
 ]
