@@ -31,3 +31,6 @@ Thumbs.db
 
 # Patches locaux de travail
 patches/
+
+# Fichiers temporaires Celery Beat
+celerybeat-schedule*
