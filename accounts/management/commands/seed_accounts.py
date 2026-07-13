@@ -362,6 +362,11 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("consulter_incidents", "Consulter les incidents", "incidents", "Consulter les alertes et incidents selon le périmètre autorisé."),
     PermissionDefinition("generer_alerte_automatique", "Générer les alertes automatiques", "incidents", "Lancer ou superviser les scans automatiques d'intégrité."),
 
+    # Notifications et e-mails (aucune table métier)
+    PermissionDefinition("envoyer_email_test", "Envoyer un e-mail de test", "notifications", "Tester la configuration e-mail sur sa propre adresse."),
+    PermissionDefinition("relancer_email_echoue", "Relancer un e-mail échoué", "notifications", "Relancer uniquement un envoi dont l'échec est tracé dans l'audit."),
+    PermissionDefinition("consulter_statistiques_notifications", "Consulter les statistiques des e-mails", "notifications", "Consulter les succès et échecs d'envoi selon le périmètre autorisé."),
+
     # Audit et traçabilité
     PermissionDefinition("consulter_journaux_audit", "Consulter les journaux d'audit", "audit", "Consulter les actions selon le périmètre autorisé."),
     PermissionDefinition("consulter_statistiques_audit", "Consulter les statistiques d'audit", "audit", "Consulter les statistiques des acteurs, immergés, documents et du système."),
@@ -483,6 +488,26 @@ PERMISSIONS_INCIDENTS_PAR_ROLE = {
 }
 
 
+PERMISSIONS_NOTIFICATIONS_PAR_ROLE = {
+    "ADMINISTRATEUR": {
+        "envoyer_email_test",
+        "relancer_email_echoue",
+        "consulter_statistiques_notifications",
+    },
+    "DGAS": {
+        "relancer_email_echoue",
+        "consulter_statistiques_notifications",
+    },
+    "DIRECTEUR_REGIONAL": {
+        "relancer_email_echoue",
+        "consulter_statistiques_notifications",
+    },
+    "RESPONSABLE_CENTRE": {
+        "consulter_statistiques_notifications",
+    },
+}
+
+
 PERMISSIONS_AUDIT_PAR_ROLE = {
     "ADMINISTRATEUR": {
         "consulter_journaux_audit",
@@ -521,7 +546,7 @@ PERMISSIONS_AUDIT_PAR_ROLE = {
 
 
 class Command(BaseCommand):
-    help = "Initialise les permissions, les rôles de base et les droits incidents/audit FasoIM."
+    help = "Initialise les permissions, les rôles de base et les droits incidents/audit/notifications FasoIM."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -548,6 +573,8 @@ class Command(BaseCommand):
         associations_incidents_mises_a_jour = 0
         associations_audit_creees = 0
         associations_audit_mises_a_jour = 0
+        associations_notifications_creees = 0
+        associations_notifications_mises_a_jour = 0
 
         permission_obsolete = Permission.objects.filter(
             code="creer_alerte",
@@ -624,6 +651,31 @@ class Command(BaseCommand):
                 else:
                     associations_incidents_mises_a_jour += 1
 
+        for code_role, codes_permissions in PERMISSIONS_NOTIFICATIONS_PAR_ROLE.items():
+            role = Role.objects.get(code=code_role, deleted_at__isnull=True)
+            permissions = Permission.objects.filter(
+                code__in=codes_permissions,
+                module="notifications",
+                statut=Permission.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            )
+            for permission in permissions:
+                _, created = RolePermission.objects.update_or_create(
+                    role=role,
+                    permission=permission,
+                    deleted_at__isnull=True,
+                    defaults={
+                        "est_delegable": False,
+                        "perimetre_delegation_max": role.perimetre_autorise,
+                        "statut": RolePermission.Statut.ACTIVE,
+                        "deleted_at": None,
+                    },
+                )
+                if created:
+                    associations_notifications_creees += 1
+                else:
+                    associations_notifications_mises_a_jour += 1
+
         for code_role, codes_permissions in PERMISSIONS_AUDIT_PAR_ROLE.items():
             role = Role.objects.get(code=code_role, deleted_at__isnull=True)
             permissions = Permission.objects.filter(
@@ -667,4 +719,11 @@ class Command(BaseCommand):
         self.stdout.write(
             "Associations audit mises à jour : "
             f"{associations_audit_mises_a_jour}"
+        )
+        self.stdout.write(
+            f"Associations notifications créées : {associations_notifications_creees}"
+        )
+        self.stdout.write(
+            "Associations notifications mises à jour : "
+            f"{associations_notifications_mises_a_jour}"
         )

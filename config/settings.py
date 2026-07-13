@@ -162,6 +162,27 @@ EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
 EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="FasoIM <noreply@fasoim.local>")
+EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=20, cast=int)
+
+# Notifications sans table : e-mails, idempotence Redis + preuve dans audit.
+NOTIFICATIONS_ENABLED = config("NOTIFICATIONS_ENABLED", default=True, cast=bool)
+NOTIFICATIONS_ENABLE_DURING_TESTS = config("NOTIFICATIONS_ENABLE_DURING_TESTS", default=False, cast=bool)
+NOTIFICATIONS_LOCK_SECONDS = config("NOTIFICATIONS_LOCK_SECONDS", default=300, cast=int)
+NOTIFICATIONS_TENTATIVE_TTL_SECONDS = config(
+    "NOTIFICATIONS_TENTATIVE_TTL_SECONDS", default=600, cast=int
+)
+NOTIFICATIONS_DEDUP_SUCCESS_SECONDS = config(
+    "NOTIFICATIONS_DEDUP_SUCCESS_SECONDS", default=31536000, cast=int
+)
+NOTIFICATIONS_BATCH_SIZE = config("NOTIFICATIONS_BATCH_SIZE", default=200, cast=int)
+NOTIFICATIONS_MAX_RELAIS_ETABLISSEMENT = config(
+    "NOTIFICATIONS_MAX_RELAIS_ETABLISSEMENT", default=3, cast=int
+)
+NOTIFICATIONS_RETRY_DELAY_SECONDS = config(
+    "NOTIFICATIONS_RETRY_DELAY_SECONDS", default=60, cast=int
+)
+FASOIM_LOGIN_URL = config("FASOIM_LOGIN_URL", default="http://127.0.0.1:3000/connexion")
+FASOIM_PUBLIC_URL = config("FASOIM_PUBLIC_URL", default="http://127.0.0.1:3000")
 
 # Surveillance automatique des alertes et incidents
 # Celery Beat doit être lancé séparément. Les tâches restent sans effet sur les
