@@ -1339,7 +1339,7 @@ class AttestationService:
         ))
         if any(r.decision == ResultatFinal.Decision.A_VERIFIER for r in resultats):
             raise ValidationDocumentsErreur("Des résultats restent à vérifier dans ce centre.")
-        
+
         documents = list(
             DocumentGenere.objects
             .select_for_update(of=("self",))
