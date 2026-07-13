@@ -184,6 +184,12 @@ NOTIFICATIONS_RETRY_DELAY_SECONDS = config(
 FASOIM_LOGIN_URL = config("FASOIM_LOGIN_URL", default="http://127.0.0.1:3000/connexion")
 FASOIM_PUBLIC_URL = config("FASOIM_PUBLIC_URL", default="http://127.0.0.1:3000")
 
+# Documents, attestations et publications officielles.
+DOCUMENTS_PUBLIC_RATE_LIMIT = config("DOCUMENTS_PUBLIC_RATE_LIMIT", default=20, cast=int)
+DOCUMENTS_PUBLIC_RATE_WINDOW_SECONDS = config("DOCUMENTS_PUBLIC_RATE_WINDOW_SECONDS", default=900, cast=int)
+DOCUMENTS_PROGRESS_TTL_SECONDS = config("DOCUMENTS_PROGRESS_TTL_SECONDS", default=86400, cast=int)
+DOCUMENTS_DETECTION_READY_MINUTES = config("DOCUMENTS_DETECTION_READY_MINUTES", default=10, cast=int)
+
 # Surveillance automatique des alertes et incidents
 # Celery Beat doit être lancé séparément. Les tâches restent sans effet sur les
 # validations métier : elles observent uniquement l'état persistant du système.
@@ -221,5 +227,9 @@ CELERY_BEAT_SCHEDULE = {
     "incidents-escalade-toutes-les-5-minutes": {
         "task": "incidents.escalader_retards",
         "schedule": crontab(minute="*/5"),
+    },
+    "documents-detecter-centres-prets-attestations": {
+        "task": "documents.detecter_centres_prets_attestations",
+        "schedule": crontab(minute=f"*/{max(1, DOCUMENTS_DETECTION_READY_MINUTES)}"),
     },
 }

@@ -88,6 +88,20 @@ class SessionImmersionService:
         if nouveau_statut not in statuts_valides:
             raise ValidationError("Statut de session invalide.")
 
+        if (
+            nouveau_statut == SessionImmersion.Statut.TERMINEE
+            and session.statut != SessionImmersion.Statut.TERMINEE
+        ):
+            # Import local pour éviter une dépendance circulaire au chargement.
+            from documents.service import SessionClotureService
+
+            etat = SessionClotureService.verifier(session)
+            if not etat.cloturable:
+                raise ValidationError({
+                    "session": "La session ne peut pas être terminée tant que des opérations dépendantes restent ouvertes.",
+                    "blocages": etat.blocages,
+                })
+
         session.statut = nouveau_statut
         session.save(update_fields=["statut", "updated_at"])
         return session

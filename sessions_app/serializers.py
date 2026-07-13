@@ -32,6 +32,14 @@ class ParametreSessionInputSerializer(serializers.Serializer):
         min_value=0,
         max_value=100,
     )
+    moyenne_minimum_attestation = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        required=False,
+        default="10.00",
+        min_value=0,
+        max_value=20,
+    )
     directives_generales = serializers.CharField(required=False, allow_blank=True)
     consignes_generales = serializers.CharField(required=False, allow_blank=True)
     documents_exiges = serializers.ListField(
@@ -67,6 +75,7 @@ class ParametreSessionSerializer(serializers.ModelSerializer):
             "attestation_active",
             "consultation_publique_active",
             "taux_presence_minimum_attestation",
+            "moyenne_minimum_attestation",
             "directives_generales",
             "consignes_generales",
             "documents_exiges",

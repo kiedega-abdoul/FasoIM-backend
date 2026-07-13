@@ -38,6 +38,7 @@ class ParametreSessionInline(admin.StackedInline):
             {
                 "fields": (
                     "taux_presence_minimum_attestation",
+                    "moyenne_minimum_attestation",
                     "directives_generales",
                     "consignes_generales",
                     "documents_exiges",

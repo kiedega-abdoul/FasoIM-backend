@@ -375,6 +375,23 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("exporter_journaux_audit", "Exporter les journaux d'audit", "audit", "Générer et télécharger un export filtré des journaux autorisés."),
     PermissionDefinition("consulter_activite_acteur", "Consulter l'activité d'un acteur", "audit", "Consulter les actions d'un acteur selon le périmètre autorisé."),
     PermissionDefinition("consulter_activite_immerge", "Consulter l'activité d'un immergé", "audit", "Consulter les informations reçues et les consultations d'un immergé."),
+
+    # Documents, publications et attestations
+    PermissionDefinition("consulter_documents", "Consulter les documents", "documents", "Consulter les documents générés selon le périmètre autorisé."),
+    PermissionDefinition("telecharger_document", "Télécharger un document", "documents", "Télécharger un document interne autorisé."),
+    PermissionDefinition("generer_rapports", "Générer des rapports", "documents", "Générer des rapports PDF, Excel ou CSV selon le périmètre."),
+    PermissionDefinition("consulter_publications", "Consulter les publications", "documents", "Consulter les workflows de publication selon le périmètre."),
+    PermissionDefinition("soumettre_publication_centre", "Soumettre une publication de centre", "documents", "Soumettre les informations d'arrivée ou attestations d'un centre."),
+    PermissionDefinition("valider_publication_region", "Valider une publication régionale", "documents", "Valider les publications des centres de sa région."),
+    PermissionDefinition("rejeter_publication_region", "Renvoyer une publication pour correction", "documents", "Renvoyer une publication de centre avec un motif."),
+    PermissionDefinition("publier_informations_arrivee", "Publier les informations d'arrivée", "documents", "Publier nationalement les informations avant l'arrivée."),
+    PermissionDefinition("consulter_resultats_finaux", "Consulter les résultats finaux", "documents", "Consulter les décisions d'éligibilité selon le périmètre."),
+    PermissionDefinition("calculer_resultats_finaux", "Calculer les résultats finaux", "documents", "Calculer l'éligibilité des immergés d'un centre."),
+    PermissionDefinition("valider_resultats_centre", "Valider les résultats du centre", "documents", "Valider les décisions finales après traitement des cas à vérifier."),
+    PermissionDefinition("generer_attestations", "Générer les attestations", "documents", "Générer en lot les attestations des immergés éligibles."),
+    PermissionDefinition("signer_attestations_region", "Signer les attestations régionales", "documents", "Contrôler et signer les attestations des centres de sa région."),
+    PermissionDefinition("publier_attestations", "Publier les attestations", "documents", "Publier nationalement les attestations signées."),
+    PermissionDefinition("verifier_cloture_session", "Vérifier la clôture d'une session", "documents", "Consulter les blocages empêchant la clôture définitive."),
 ]
 
 
@@ -545,8 +562,45 @@ PERMISSIONS_AUDIT_PAR_ROLE = {
 }
 
 
+PERMISSIONS_DOCUMENTS_PAR_ROLE = {
+    "ADMINISTRATEUR": {
+        "consulter_documents", "telecharger_document", "generer_rapports",
+        "consulter_publications", "soumettre_publication_centre",
+        "valider_publication_region", "rejeter_publication_region",
+        "publier_informations_arrivee", "consulter_resultats_finaux",
+        "calculer_resultats_finaux", "valider_resultats_centre",
+        "generer_attestations", "signer_attestations_region",
+        "publier_attestations", "verifier_cloture_session",
+    },
+    "DGAS": {
+        "consulter_documents", "telecharger_document", "generer_rapports",
+        "consulter_publications", "valider_publication_region",
+        "rejeter_publication_region", "publier_informations_arrivee",
+        "consulter_resultats_finaux", "calculer_resultats_finaux",
+        "valider_resultats_centre", "generer_attestations",
+        "signer_attestations_region", "publier_attestations",
+        "verifier_cloture_session",
+    },
+    "DIRECTEUR_REGIONAL": {
+        "consulter_documents", "telecharger_document", "generer_rapports",
+        "consulter_publications", "valider_publication_region",
+        "rejeter_publication_region", "consulter_resultats_finaux",
+        "signer_attestations_region", "verifier_cloture_session",
+    },
+    "RESPONSABLE_CENTRE": {
+        "consulter_documents", "telecharger_document", "generer_rapports",
+        "consulter_publications", "soumettre_publication_centre",
+        "consulter_resultats_finaux", "calculer_resultats_finaux",
+        "valider_resultats_centre", "generer_attestations",
+        "verifier_cloture_session",
+    },
+    "FORMATEUR": {"consulter_documents", "telecharger_document"},
+    "AGENT_SANTE": {"consulter_documents", "telecharger_document"},
+}
+
+
 class Command(BaseCommand):
-    help = "Initialise les permissions, les rôles de base et les droits incidents/audit/notifications FasoIM."
+    help = "Initialise les permissions, les rôles de base et les droits incidents/audit/notifications/documents FasoIM."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -575,6 +629,8 @@ class Command(BaseCommand):
         associations_audit_mises_a_jour = 0
         associations_notifications_creees = 0
         associations_notifications_mises_a_jour = 0
+        associations_documents_creees = 0
+        associations_documents_mises_a_jour = 0
 
         permission_obsolete = Permission.objects.filter(
             code="creer_alerte",
@@ -676,6 +732,31 @@ class Command(BaseCommand):
                 else:
                     associations_notifications_mises_a_jour += 1
 
+        for code_role, codes_permissions in PERMISSIONS_DOCUMENTS_PAR_ROLE.items():
+            role = Role.objects.get(code=code_role, deleted_at__isnull=True)
+            permissions = Permission.objects.filter(
+                code__in=codes_permissions,
+                module="documents",
+                statut=Permission.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            )
+            for permission in permissions:
+                _, created = RolePermission.objects.update_or_create(
+                    role=role,
+                    permission=permission,
+                    deleted_at__isnull=True,
+                    defaults={
+                        "est_delegable": False,
+                        "perimetre_delegation_max": role.perimetre_autorise,
+                        "statut": RolePermission.Statut.ACTIVE,
+                        "deleted_at": None,
+                    },
+                )
+                if created:
+                    associations_documents_creees += 1
+                else:
+                    associations_documents_mises_a_jour += 1
+
         for code_role, codes_permissions in PERMISSIONS_AUDIT_PAR_ROLE.items():
             role = Role.objects.get(code=code_role, deleted_at__isnull=True)
             permissions = Permission.objects.filter(
@@ -726,4 +807,11 @@ class Command(BaseCommand):
         self.stdout.write(
             "Associations notifications mises à jour : "
             f"{associations_notifications_mises_a_jour}"
+        )
+        self.stdout.write(
+            f"Associations documents créées : {associations_documents_creees}"
+        )
+        self.stdout.write(
+            "Associations documents mises à jour : "
+            f"{associations_documents_mises_a_jour}"
         )

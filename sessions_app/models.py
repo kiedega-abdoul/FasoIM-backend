@@ -262,6 +262,19 @@ class ParametreSession(models.Model):
         ],
     )
 
+    moyenne_minimum_attestation = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("10.00"),
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+            MaxValueValidator(Decimal("20.00")),
+        ],
+        help_text=(
+            "Moyenne minimale sur 20 lorsque les évaluations sont activées."
+        ),
+    )
+
     directives_generales = models.TextField(blank=True)
     consignes_generales = models.TextField(blank=True)
     documents_exiges = models.JSONField(default=list, blank=True)
@@ -281,6 +294,13 @@ class ParametreSession(models.Model):
                     & models.Q(taux_presence_minimum_attestation__lte=100)
                 ),
                 name="parametres_session_taux_presence_0_100",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(moyenne_minimum_attestation__gte=0)
+                    & models.Q(moyenne_minimum_attestation__lte=20)
+                ),
+                name="parametres_session_moyenne_0_20",
             ),
         ]
 
@@ -311,6 +331,16 @@ class ParametreSession(models.Model):
             raise ValidationError({
                 "taux_presence_minimum_attestation": (
                     "Le taux minimum de présence doit être compris entre 0 et 100."
+                )
+            })
+
+        if (
+            self.moyenne_minimum_attestation < Decimal("0.00")
+            or self.moyenne_minimum_attestation > Decimal("20.00")
+        ):
+            raise ValidationError({
+                "moyenne_minimum_attestation": (
+                    "La moyenne minimale doit être comprise entre 0 et 20."
                 )
             })
 
