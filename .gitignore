@@ -34,3 +34,18 @@ patches/
 
 # Fichiers temporaires Celery Beat
 celerybeat-schedule*
+
+# Archives et copies locales
+backend.zip
+backend/
+
+# Environnement Python
+venv/
+.env
+
+# Fichiers générés
+__pycache__/
+*.py[cod]
+media/
+staticfiles/
+celerybeat-schedule*
