@@ -17,12 +17,15 @@ from .models import (
     Permission,
     Role,
 )
+from sessions_app.models import SessionImmersion
+
 from .service import (
     MOT_DE_PASSE_ACTEUR_PAR_DEFAUT,
     ActeurService,
     AffectationActeurService,
     AffectationPermissionService,
     AffectationRoleService,
+    ContexteActeurService,
     ControleAccesService,
     DelegationActeurService,
     DemandePermissionService,
@@ -368,3 +371,97 @@ class AccountsAPITests(TestCase):
             ).exists()
         )
         mock_cache.assert_called_once_with(acteur.id)
+
+
+class ContexteActeurAPITests(TestCase):
+    """Tests des endpoints personnels de contexte et d'affectations."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.acteur = Acteur.objects.create_user(
+            username="acteurcontexte",
+            email="acteurcontexte@fasoim.local",
+            password="SecretPass123!",
+            first_name="Acteur",
+            last_name="Contexte",
+            statut=Acteur.Statut.ACTIF,
+        )
+        self.client.force_authenticate(self.acteur)
+
+    @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
+    def test_mon_contexte_priorise_affectation_permanente(self, _mock_cache):
+        session = SessionImmersion.objects.create(
+            nom="Session temporaire",
+            annee=2026,
+            numero_promotion=2,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=timezone.localdate() - timedelta(days=2),
+            date_fin=timezone.localdate() + timedelta(days=30),
+            statut=SessionImmersion.Statut.EN_COURS,
+        )
+        temporaire = AffectationActeurService.creer_affectation(
+            acteur=self.acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.CENTRE,
+            session=session,
+            centre_id=12,
+        )
+        permanente = AffectationActeurService.creer_affectation(
+            acteur=self.acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.NATIONAL,
+        )
+
+        response = self.client.get(reverse("accounts:acteur-mon-contexte"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["affectation_courante"]["id"], permanente.id)
+        self.assertTrue(response.data["affectation_courante"]["est_permanente"])
+        self.assertEqual(response.data["nombre_affectations_actives"], 2)
+        self.assertTrue(response.data["peut_changer_affectation"])
+        self.assertNotEqual(temporaire.id, permanente.id)
+
+    @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
+    def test_mes_affectations_et_changement_de_contexte(self, _mock_cache):
+        permanente = AffectationActeurService.creer_affectation(
+            acteur=self.acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.NATIONAL,
+        )
+        autre = AffectationActeurService.creer_affectation(
+            acteur=self.acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.REGION,
+            region_code="CENTRE",
+        )
+
+        liste = self.client.get(reverse("accounts:acteur-mes-affectations"))
+        contexte = self.client.get(
+            reverse("accounts:acteur-contexte-affectation", kwargs={"affectation_id": autre.id})
+        )
+
+        self.assertEqual(liste.status_code, status.HTTP_200_OK, liste.data)
+        self.assertEqual(liste.data["affectation_par_defaut_id"], permanente.id)
+        self.assertEqual(liste.data["nombre_affectations_actives"], 2)
+        self.assertEqual(contexte.status_code, status.HTTP_200_OK, contexte.data)
+        self.assertEqual(contexte.data["affectation_courante"]["id"], autre.id)
+        self.assertEqual(contexte.data["affectation_courante"]["region_code"], "CENTRE")
+
+    def test_contexte_refuse_affectation_d_un_autre_acteur(self):
+        autre_acteur = Acteur.objects.create_user(
+            username="autreacteur",
+            email="autreacteur@fasoim.local",
+            password="SecretPass123!",
+            first_name="Autre",
+            last_name="Acteur",
+            statut=Acteur.Statut.ACTIF,
+        )
+        affectation = AffectationActeur.objects.create(
+            acteur=autre_acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.NATIONAL,
+            date_debut=timezone.localdate(),
+            statut=AffectationActeur.Statut.ACTIVE,
+        )
+
+        response = self.client.get(
+            reverse("accounts:acteur-contexte-affectation", kwargs={"affectation_id": affectation.id})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)

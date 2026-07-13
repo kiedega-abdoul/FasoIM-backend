@@ -856,3 +856,145 @@ class ControleAccesService(ServiceBase):
             return centre_id is not None and affectation.centre_id == centre_id
 
         return False
+
+
+class ContexteActeurService(ServiceBase):
+    """Construit le contexte de travail personnel d'un acteur connecté."""
+
+    PRIORITE_NIVEAU = {
+        AffectationActeur.NiveauAffectation.PLATEFORME: 0,
+        AffectationActeur.NiveauAffectation.NATIONAL: 1,
+        AffectationActeur.NiveauAffectation.REGION: 2,
+        AffectationActeur.NiveauAffectation.CENTRE: 3,
+    }
+
+    @staticmethod
+    def lister_affectations_actives(acteur):
+        acteur = ActeurRepository.get_actif_by_id(ContexteActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+        return AffectationActeurRepository.lister_actives_par_acteur(acteur)
+
+    @staticmethod
+    def selectionner_affectation_par_defaut(acteur):
+        """Priorise une affectation permanente, puis le périmètre le plus large."""
+
+        affectations = list(ContexteActeurService.lister_affectations_actives(acteur))
+        if not affectations:
+            return None
+
+        def cle(affectation):
+            est_temporaire = 1 if affectation.session_id is not None else 0
+            priorite_niveau = ContexteActeurService.PRIORITE_NIVEAU.get(
+                affectation.niveau_affectation,
+                99,
+            )
+            date_debut = affectation.date_debut.toordinal() if affectation.date_debut else 0
+            return (est_temporaire, priorite_niveau, -date_debut, -affectation.id)
+
+        return sorted(affectations, key=cle)[0]
+
+    @staticmethod
+    def _roles_affectation(affectation):
+        attributions = AffectationRoleRepository.lister_actifs_par_affectation(affectation)
+        return [
+            {
+                "id": attribution.role_id,
+                "code": attribution.role.code,
+                "libelle": attribution.role.libelle,
+                "niveau": attribution.role.niveau,
+                "perimetre_autorise": attribution.role.perimetre_autorise,
+            }
+            for attribution in attributions.order_by("role__niveau", "role__code")
+        ]
+
+    @staticmethod
+    def _session_affectation(affectation):
+        if not affectation.session_id:
+            return None
+        return {
+            "id": affectation.session_id,
+            "code": affectation.session.code,
+            "nom": affectation.session.nom,
+            "statut": affectation.session.statut,
+            "date_debut": affectation.session.date_debut,
+            "date_fin": affectation.session.date_fin,
+        }
+
+    @staticmethod
+    def serialiser_affectation(acteur, affectation, *, est_par_defaut=False):
+        permissions = sorted(ControleAccesService.permissions_effectives(acteur, affectation))
+        return {
+            "id": affectation.id,
+            "est_permanente": affectation.session_id is None,
+            "est_par_defaut": est_par_defaut,
+            "niveau_affectation": affectation.niveau_affectation,
+            "region_code": affectation.region_code or "",
+            "centre_id": affectation.centre_id,
+            "date_debut": affectation.date_debut,
+            "date_fin": affectation.date_fin,
+            "statut": affectation.statut,
+            "session": ContexteActeurService._session_affectation(affectation),
+            "roles": ContexteActeurService._roles_affectation(affectation),
+            "permissions": permissions,
+        }
+
+    @staticmethod
+    def construire_contexte(acteur, affectation=None):
+        acteur = ActeurRepository.get_actif_by_id(ContexteActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+
+        affectations = ContexteActeurService.lister_affectations_actives(acteur)
+        nombre_affectations = affectations.count()
+        affectation_par_defaut = ContexteActeurService.selectionner_affectation_par_defaut(acteur)
+
+        if affectation is None:
+            affectation_courante = affectation_par_defaut
+        else:
+            affectation_courante = AffectationActeurRepository.get_active_by_id(
+                ContexteActeurService.identifiant(affectation)
+            )
+            if not affectation_courante or affectation_courante.acteur_id != acteur.id:
+                raise ValidationError("Cette affectation active ne vous appartient pas.")
+
+        return {
+            "acteur": acteur,
+            "affectation_courante": (
+                ContexteActeurService.serialiser_affectation(
+                    acteur,
+                    affectation_courante,
+                    est_par_defaut=(
+                        affectation_par_defaut is not None
+                        and affectation_courante.id == affectation_par_defaut.id
+                    ),
+                )
+                if affectation_courante
+                else None
+            ),
+            "nombre_affectations_actives": nombre_affectations,
+            "peut_changer_affectation": nombre_affectations > 1,
+        }
+
+    @staticmethod
+    def construire_liste_affectations(acteur):
+        acteur = ActeurRepository.get_actif_by_id(ContexteActeurService.identifiant(acteur))
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+
+        affectations = list(ContexteActeurService.lister_affectations_actives(acteur))
+        affectation_par_defaut = ContexteActeurService.selectionner_affectation_par_defaut(acteur)
+        affectation_par_defaut_id = getattr(affectation_par_defaut, "id", None)
+
+        return {
+            "affectation_par_defaut_id": affectation_par_defaut_id,
+            "nombre_affectations_actives": len(affectations),
+            "affectations": [
+                ContexteActeurService.serialiser_affectation(
+                    acteur,
+                    affectation,
+                    est_par_defaut=affectation.id == affectation_par_defaut_id,
+                )
+                for affectation in affectations
+            ],
+        }

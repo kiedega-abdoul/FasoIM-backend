@@ -48,9 +48,11 @@ from .serializers import (
     AffectationPermissionSerializer,
     AffectationRoleSerializer,
     ChangementMotDePasseSerializer,
+    ContexteActeurSerializer,
     DelegationActeurSerializer,
     DemandePermissionSerializer,
     PermissionSerializer,
+    ListeAffectationsActeurSerializer,
     PermissionSystemeCreateSerializer,
     RoleCreateSerializer,
     RolePermissionSerializer,
@@ -63,6 +65,7 @@ from .service import (
     AffectationActeurService,
     AffectationPermissionService,
     AffectationRoleService,
+    ContexteActeurService,
     ControleAccesService,
     DelegationActeurService,
     DemandePermissionService,
@@ -180,6 +183,46 @@ class ActeurViewSet(AccountsViewSetBase):
     @action(detail=False, methods=["get"], permission_classes=[EstActeurActif])
     def me(self, request):
         serializer = ActeurDetailSerializer(request.user, context=self.get_serializer_context())
+        return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[EstActeurActif],
+        url_path="mon-contexte",
+    )
+    def mon_contexte(self, request):
+        contexte = ContexteActeurService.construire_contexte(request.user)
+        serializer = ContexteActeurSerializer(contexte)
+        return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[EstActeurActif],
+        url_path="mes-affectations",
+    )
+    def mes_affectations(self, request):
+        donnees = ContexteActeurService.construire_liste_affectations(request.user)
+        serializer = ListeAffectationsActeurSerializer(donnees)
+        return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[EstActeurActif],
+        url_path=r"contexte-affectation/(?P<affectation_id>[^/.]+)",
+    )
+    def contexte_affectation(self, request, affectation_id=None):
+        try:
+            contexte = ContexteActeurService.construire_contexte(
+                request.user,
+                affectation=affectation_id,
+            )
+        except DjangoValidationError as exception:
+            convertir_erreur_service(exception)
+
+        serializer = ContexteActeurSerializer(contexte)
         return Response(serializer.data)
 
     @action(detail=False, methods=["patch"], permission_classes=[EstActeurActif])

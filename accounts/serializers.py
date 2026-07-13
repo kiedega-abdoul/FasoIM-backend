@@ -113,6 +113,51 @@ class ActeurDetailSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class RoleContexteSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    code = serializers.CharField()
+    libelle = serializers.CharField()
+    niveau = serializers.IntegerField()
+    perimetre_autorise = serializers.CharField()
+
+
+class SessionContexteSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    code = serializers.CharField()
+    nom = serializers.CharField()
+    statut = serializers.CharField()
+    date_debut = serializers.DateField()
+    date_fin = serializers.DateField()
+
+
+class AffectationContexteSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    est_permanente = serializers.BooleanField()
+    est_par_defaut = serializers.BooleanField()
+    niveau_affectation = serializers.CharField()
+    region_code = serializers.CharField(allow_blank=True)
+    centre_id = serializers.IntegerField(allow_null=True)
+    date_debut = serializers.DateField()
+    date_fin = serializers.DateField(allow_null=True)
+    statut = serializers.CharField()
+    session = SessionContexteSerializer(allow_null=True)
+    roles = RoleContexteSerializer(many=True)
+    permissions = serializers.ListField(child=serializers.CharField())
+
+
+class ContexteActeurSerializer(serializers.Serializer):
+    acteur = ActeurDetailSerializer()
+    affectation_courante = AffectationContexteSerializer(allow_null=True)
+    nombre_affectations_actives = serializers.IntegerField()
+    peut_changer_affectation = serializers.BooleanField()
+
+
+class ListeAffectationsActeurSerializer(serializers.Serializer):
+    affectation_par_defaut_id = serializers.IntegerField(allow_null=True)
+    nombre_affectations_actives = serializers.IntegerField()
+    affectations = AffectationContexteSerializer(many=True)
+
+
 class ActeurCreateSerializer(serializers.ModelSerializer):
     """Création d'un acteur interne.
 
