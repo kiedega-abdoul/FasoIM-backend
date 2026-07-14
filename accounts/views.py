@@ -4,6 +4,9 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from sessions_app.models import SessionImmersion
+from affectations.models import CentreImmersion, RegionImmersion
+
 from .models import (
     Acteur,
     AffectationActeur,
@@ -409,6 +412,63 @@ class AffectationActeurViewSet(mixins.DestroyModelMixin, AccountsReadCreateViewS
 
     def perform_create(self, serializer):
         serializer.save(affecte_par=self.request.user)
+
+    @action(detail=False, methods=["get"], url_path="references")
+    def references(self, request):
+        """Référentiels lisibles nécessaires au formulaire d'affectation.
+
+        Cette action évite de demander à l'utilisateur des identifiants
+        techniques et reste protégée par la permission affecter_acteur_session.
+        """
+
+        region_code = (request.query_params.get("region_code") or "").strip()
+
+        sessions = list(
+            SessionImmersion.objects.filter(
+                deleted_at__isnull=True,
+                statut__in=AffectationActeur.SESSION_STATUTS_ACTIFS,
+            )
+            .order_by("-date_debut", "nom")
+            .values("id", "code", "nom", "statut", "date_debut", "date_fin")
+        )
+
+        regions = list(
+            RegionImmersion.objects.filter(
+                deleted_at__isnull=True,
+                statut=RegionImmersion.Statut.ACTIVE,
+            )
+            .order_by("nom")
+            .values("id", "code", "nom")
+        )
+
+        centres_queryset = CentreImmersion.objects.filter(
+            deleted_at__isnull=True,
+            statut=CentreImmersion.Statut.ACTIF,
+        ).select_related("region")
+
+        if region_code:
+            centres_queryset = centres_queryset.filter(region__code__iexact=region_code)
+
+        centres = [
+            {
+                "id": centre.id,
+                "code": centre.code,
+                "nom": centre.nom,
+                "ville": centre.ville,
+                "province": centre.province,
+                "region_code": centre.region.code,
+                "region_nom": centre.region.nom,
+            }
+            for centre in centres_queryset.order_by("region__nom", "nom")
+        ]
+
+        return Response(
+            {
+                "sessions": sessions,
+                "regions": regions,
+                "centres": centres,
+            }
+        )
 
     def destroy(self, request, *args, **kwargs):
         affectation = self.get_object()

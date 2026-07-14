@@ -29,7 +29,7 @@ def envoyer_email_bienvenue_acteur_task(self, acteur_id, mot_de_passe_temporaire
             sujet=sujet,
             message=message,
             type_message=TypesMessage.BIENVENUE_ACTEUR,
-            cle_evenement=f"BIENVENUE_ACTEUR:{acteur.id}:{acteur.created_at.isoformat()}",
+            cle_evenement=f"BIENVENUE_ACTEUR:{acteur.id}:{acteur.date_joined.isoformat()}",
             acteur=acteur,
             objet=acteur,
             contexte={"mode_contact": "DIRECT"},

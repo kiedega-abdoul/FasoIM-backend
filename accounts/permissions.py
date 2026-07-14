@@ -236,6 +236,7 @@ class PermissionAffectationActeur(PermissionAccountsBase):
         "list": "lister_acteurs",
         "retrieve": "consulter_acteur",
         "create": "affecter_acteur_session",
+        "references": "affecter_acteur_session",
         "update": "suspendre_affectation_acteur",
         "partial_update": "suspendre_affectation_acteur",
         "destroy": "retirer_affectation_acteur",

@@ -9,6 +9,14 @@ SECRET_KEY = config("SECRET_KEY", default="dev-fasoim-change-me")
 DEBUG = config("DEBUG", default=True, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="127.0.0.1,localhost", cast=Csv())
 
+# Frontends autorisés à appeler l'API depuis un navigateur.
+CORS_ALLOWED_ORIGINS = config(
+    "CORS_ALLOWED_ORIGINS",
+    default="http://localhost:5173,http://127.0.0.1:5173",
+    cast=Csv(),
+)
+CORS_URLS_REGEX = r"^/api/.*$"
+
 INSTALLED_APPS = [
     # Django
     "django.contrib.admin",
@@ -22,6 +30,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "drf_spectacular",
+    "corsheaders",
 
      # Applications FasoIM
     "accounts",
@@ -43,6 +52,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -181,8 +191,8 @@ NOTIFICATIONS_MAX_RELAIS_ETABLISSEMENT = config(
 NOTIFICATIONS_RETRY_DELAY_SECONDS = config(
     "NOTIFICATIONS_RETRY_DELAY_SECONDS", default=60, cast=int
 )
-FASOIM_LOGIN_URL = config("FASOIM_LOGIN_URL", default="http://127.0.0.1:3000/connexion")
-FASOIM_PUBLIC_URL = config("FASOIM_PUBLIC_URL", default="http://127.0.0.1:3000")
+FASOIM_LOGIN_URL = config("FASOIM_LOGIN_URL", default="http://localhost:5173/espace-acteur")
+FASOIM_PUBLIC_URL = config("FASOIM_PUBLIC_URL", default="http://localhost:5173")
 
 # Documents, attestations et publications officielles.
 DOCUMENTS_PUBLIC_RATE_LIMIT = config("DOCUMENTS_PUBLIC_RATE_LIMIT", default=20, cast=int)

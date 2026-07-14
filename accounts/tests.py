@@ -119,6 +119,79 @@ class AccountsServiceTests(TestCase):
         self.assertGreaterEqual(mock_cache.call_count, 2)
 
     @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
+    def test_permission_action_acteur_ajoute_les_acces_de_navigation(self, _mock_cache):
+        acteur = self.creer_acteur(username="modificateur", email="modificateur@fasoim.local")
+        role, _permission = self.creer_role_permission("modifier_acteur")
+        affectation = AffectationActeurService.creer_affectation(
+            acteur=acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.NATIONAL,
+            affecte_par=self.admin,
+        )
+        AffectationRoleService.attribuer_role(affectation, role, attribue_par=self.admin)
+
+        permissions = ControleAccesService.permissions_effectives(acteur, affectation)
+
+        self.assertIn("modifier_acteur", permissions)
+        self.assertIn("lister_acteurs", permissions)
+        self.assertIn("consulter_acteur", permissions)
+        self.assertTrue(ControleAccesService.acteur_peut(acteur, "lister_acteurs", affectation=affectation).autorise)
+        self.assertFalse(ControleAccesService.acteur_peut(acteur, "creer_acteur", affectation=affectation).autorise)
+
+    @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
+    def test_permission_affectation_ouvre_gestion_des_affectations(self, _mock_cache):
+        acteur = self.creer_acteur(username="attributaire", email="attributaire@fasoim.local")
+        role, _permission = self.creer_role_permission("attribuer_role")
+        affectation = AffectationActeurService.creer_affectation(
+            acteur=acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.PLATEFORME,
+            affecte_par=self.admin,
+        )
+        AffectationRoleService.attribuer_role(affectation, role, attribue_par=self.admin)
+
+        permissions = ControleAccesService.permissions_effectives(acteur, affectation)
+
+        self.assertIn("attribuer_role", permissions)
+        self.assertIn("lister_acteurs", permissions)
+        self.assertIn("consulter_acteur", permissions)
+
+    @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
+    def test_permission_role_ouvre_liste_et_detail_roles(self, _mock_cache):
+        acteur = self.creer_acteur(username="roleur", email="roleur@fasoim.local")
+        role, _permission = self.creer_role_permission("ajouter_permission_role")
+        affectation = AffectationActeurService.creer_affectation(
+            acteur=acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.PLATEFORME,
+            affecte_par=self.admin,
+        )
+        AffectationRoleService.attribuer_role(affectation, role, attribue_par=self.admin)
+
+        permissions = ControleAccesService.permissions_effectives(acteur, affectation)
+
+        self.assertIn("ajouter_permission_role", permissions)
+        self.assertIn("lister_roles", permissions)
+        self.assertIn("consulter_role", permissions)
+        self.assertIn("lister_permissions", permissions)
+
+    @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
+    def test_permission_decision_demande_ouvre_gestion_permissions_et_demandes(self, _mock_cache):
+        acteur = self.creer_acteur(username="decideur", email="decideur@fasoim.local")
+        role, _permission = self.creer_role_permission("approuver_demande_permission")
+        affectation = AffectationActeurService.creer_affectation(
+            acteur=acteur,
+            niveau_affectation=AffectationActeur.NiveauAffectation.PLATEFORME,
+            affecte_par=self.admin,
+        )
+        AffectationRoleService.attribuer_role(affectation, role, attribue_par=self.admin)
+
+        permissions = ControleAccesService.permissions_effectives(acteur, affectation)
+
+        self.assertIn("approuver_demande_permission", permissions)
+        self.assertIn("lister_permissions", permissions)
+        self.assertIn("lister_demandes_permissions", permissions)
+        self.assertIn("consulter_demande_permission", permissions)
+        self.assertFalse(ControleAccesService.acteur_peut(acteur, "refuser_demande_permission", affectation=affectation).autorise)
+
+    @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
     def test_permission_directe_respecte_le_perimetre_region(self, mock_cache):
         acteur = self.creer_acteur()
         permission = PermissionService.creer_permission_systeme(

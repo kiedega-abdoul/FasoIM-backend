@@ -784,7 +784,133 @@ class DelegationActeurService(ServiceBase):
 
 
 class ControleAccesService(ServiceBase):
-    """Contrôle central des permissions et périmètres accounts."""
+    """Contrôle central des permissions et périmètres accounts.
+
+    Certaines permissions d'action supposent l'accès à une interface mère.
+    Les permissions de lecture nécessaires sont donc ajoutées uniquement au
+    calcul des permissions effectives. Elles ne sont pas enregistrées dans les
+    rôles, permissions directes ou délégations.
+    """
+
+    REGLES_PERMISSIONS_IMPLICITES = (
+        # Gestion des acteurs : toute action du groupe ouvre la liste.
+        (
+            {
+                "creer_acteur",
+                "modifier_acteur",
+                "desactiver_acteur",
+                "reactiver_acteur",
+                "consulter_acteur",
+                "lister_acteurs",
+            },
+            {"lister_acteurs"},
+        ),
+        # Les actions qui portent sur un acteur nécessitent aussi sa fiche.
+        (
+            {
+                "modifier_acteur",
+                "desactiver_acteur",
+                "reactiver_acteur",
+            },
+            {"consulter_acteur"},
+        ),
+        # Gestion des affectations : l'API actuelle utilise les permissions
+        # acteur pour lister et consulter les affectations.
+        (
+            {
+                "affecter_acteur_session",
+                "retirer_affectation_acteur",
+                "suspendre_affectation_acteur",
+                "reactiver_affectation_acteur",
+                "attribuer_role",
+                "retirer_role",
+                "attribuer_permission_directe",
+                "retirer_permission_directe",
+            },
+            {"lister_acteurs", "consulter_acteur"},
+        ),
+        # Gestion des rôles : toute action du groupe ouvre la liste.
+        (
+            {
+                "creer_role",
+                "modifier_role",
+                "desactiver_role",
+                "consulter_role",
+                "lister_roles",
+                "ajouter_permission_role",
+                "retirer_permission_role",
+            },
+            {"lister_roles"},
+        ),
+        # Modifier un rôle ou ses permissions nécessite son détail.
+        (
+            {
+                "modifier_role",
+                "desactiver_role",
+                "ajouter_permission_role",
+                "retirer_permission_role",
+            },
+            {"consulter_role"},
+        ),
+        # Gestion des permissions : toute action du groupe ouvre le catalogue.
+        (
+            {
+                "consulter_permission",
+                "lister_permissions",
+                "ajouter_permission_role",
+                "retirer_permission_role",
+                "attribuer_permission_directe",
+                "retirer_permission_directe",
+                "demander_permission",
+                "lister_demandes_permissions",
+                "consulter_demande_permission",
+                "approuver_demande_permission",
+                "refuser_demande_permission",
+                "annuler_demande_permission",
+            },
+            {"lister_permissions"},
+        ),
+        # Toute action sur une demande ouvre la liste des demandes.
+        (
+            {
+                "demander_permission",
+                "lister_demandes_permissions",
+                "consulter_demande_permission",
+                "approuver_demande_permission",
+                "refuser_demande_permission",
+                "annuler_demande_permission",
+            },
+            {"lister_demandes_permissions"},
+        ),
+        # Décider ou annuler une demande nécessite son détail.
+        (
+            {
+                "approuver_demande_permission",
+                "refuser_demande_permission",
+                "annuler_demande_permission",
+            },
+            {"consulter_demande_permission"},
+        ),
+    )
+
+    @classmethod
+    def ajouter_permissions_implicites(cls, codes_permissions):
+        """Retourne les permissions enrichies des accès de navigation requis.
+
+        La fermeture est répétée jusqu'à stabilité afin qu'une permission
+        implicite puisse elle-même ouvrir l'interface mère d'un autre groupe.
+        """
+        permissions = set(codes_permissions or ())
+        modifie = True
+        while modifie:
+            modifie = False
+            for permissions_declencheuses, permissions_ajoutees in cls.REGLES_PERMISSIONS_IMPLICITES:
+                if permissions.intersection(permissions_declencheuses):
+                    nouvelles = permissions_ajoutees - permissions
+                    if nouvelles:
+                        permissions.update(nouvelles)
+                        modifie = True
+        return permissions
 
     @staticmethod
     def permissions_effectives(acteur, affectation):
@@ -792,7 +918,8 @@ class ControleAccesService(ServiceBase):
         affectation = AffectationActeurRepository.get_active_by_id(ControleAccesService.identifiant(affectation))
         if not acteur or not affectation or affectation.acteur_id != acteur.id:
             return set()
-        return ControleAccesRepository.get_permission_codes_acteur(acteur, affectation)
+        permissions = ControleAccesRepository.get_permission_codes_acteur(acteur, affectation)
+        return ControleAccesService.ajouter_permissions_implicites(permissions)
 
     @staticmethod
     def acteur_peut(acteur, code_permission, *, affectation=None, session_id=None, region_code=None, centre_id=None):
@@ -813,7 +940,8 @@ class ControleAccesService(ServiceBase):
             ):
                 continue
 
-            if ControleAccesRepository.acteur_a_permission(acteur, affectation_active, code_permission):
+            permissions = ControleAccesService.permissions_effectives(acteur, affectation_active)
+            if code_permission in permissions:
                 return ResultatControleAcces(True, affectation=affectation_active)
 
         return ResultatControleAcces(False, "Permission absente ou hors périmètre.")

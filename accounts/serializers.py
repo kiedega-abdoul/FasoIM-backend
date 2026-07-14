@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from sessions_app.models import SessionImmersion
+from affectations.models import CentreImmersion, RegionImmersion
 
 from .models import (
     Acteur,
@@ -397,6 +398,8 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
     )
     session_code = serializers.CharField(source="session.code", read_only=True)
     session_nom = serializers.CharField(source="session.nom", read_only=True)
+    region_nom = serializers.SerializerMethodField()
+    centre_nom = serializers.SerializerMethodField()
     affecte_par_id = serializers.PrimaryKeyRelatedField(
         source="affecte_par",
         queryset=acteurs_actifs_queryset(),
@@ -417,7 +420,9 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
             "session_nom",
             "niveau_affectation",
             "region_code",
+            "region_nom",
             "centre_id",
+            "centre_nom",
             "date_debut",
             "date_fin",
             "statut",
@@ -425,7 +430,43 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
             "affecte_par",
             "est_active",
         ]
-        read_only_fields = ["id", "acteur", "session_code", "session_nom", "statut", "affecte_par", "est_active"]
+        read_only_fields = [
+            "id",
+            "acteur",
+            "session_code",
+            "session_nom",
+            "region_nom",
+            "centre_nom",
+            "statut",
+            "affecte_par",
+            "est_active",
+        ]
+
+    def get_region_nom(self, obj):
+        if not obj.region_code:
+            return ""
+        return (
+            RegionImmersion.objects.filter(
+                code__iexact=obj.region_code,
+                deleted_at__isnull=True,
+            )
+            .values_list("nom", flat=True)
+            .first()
+            or obj.region_code
+        )
+
+    def get_centre_nom(self, obj):
+        if not obj.centre_id:
+            return ""
+        return (
+            CentreImmersion.objects.filter(
+                id=obj.centre_id,
+                deleted_at__isnull=True,
+            )
+            .values_list("nom", flat=True)
+            .first()
+            or f"Centre {obj.centre_id}"
+        )
 
     def create(self, validated_data):
         try:

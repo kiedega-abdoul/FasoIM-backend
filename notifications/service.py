@@ -760,22 +760,26 @@ L'équipe FasoIM
             "http://127.0.0.1:8000/admin/",
         )
         nom = acteur.nom_complet or acteur.username
-        sujet = "Bienvenue sur FasoIM"
+        sujet = "Votre accès acteur à FasoIM"
         message = f"""Bonjour {nom},
 
-Votre compte FasoIM a été créé.
+Un compte acteur FasoIM vient d’être créé pour vous.
 
-Informations de connexion :
-- Nom d'utilisateur : {acteur.username}
-- Email : {acteur.email}
-- Mot de passe temporaire : {mot_de_passe_temporaire}
+Pour accéder à votre espace :
+1. Ouvrez le lien suivant : {login_url}
+2. Cliquez sur « Accéder à la plateforme ».
+3. Connectez-vous avec les informations ci-dessous.
 
-Connectez-vous ici : {login_url}
+Identifiant : {acteur.username}
+Adresse e-mail : {acteur.email}
+Mot de passe temporaire : {mot_de_passe_temporaire}
 
-Après votre première connexion, modifiez votre mot de passe.
+Pour votre sécurité, changez ce mot de passe dès votre première connexion et ne le communiquez à personne.
+
+Si vous ne reconnaissez pas cette création de compte, contactez l’administrateur FasoIM.
 
 Cordialement,
-L'équipe FasoIM
+L’équipe FasoIM
 """
         return sujet, message
 
