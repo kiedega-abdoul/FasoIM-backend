@@ -3,15 +3,20 @@ from django.utils.dateparse import parse_date
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import ParametreSession, SessionImmersion
 from .permissions import PermissionParametreSession, PermissionSessionImmersion
 from .repository import ParametreSessionRepository, SessionImmersionRepository
 from .serializers import (
+    AnnulationSessionSerializer,
+    ParametreSessionCreateSerializer,
     ParametreSessionSerializer,
     SessionImmersionCreateSerializer,
     SessionImmersionSerializer,
+    SessionPubliqueSerializer,
 )
 from .service import ParametreSessionService, SessionImmersionService
 
@@ -240,6 +245,19 @@ class SessionImmersionViewSet(viewsets.ModelViewSet):
     def terminer(self, request, pk=None):
         return self.executer_action_session(SessionImmersionService.terminer_session)
 
+    @action(detail=True, methods=["post"], url_path="annuler")
+    def annuler(self, request, pk=None):
+        session = self.get_object()
+        serializer = AnnulationSessionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            session = SessionImmersionService.annuler_session(
+                session, serializer.validated_data["motif"]
+            )
+        except DjangoValidationError as exc:
+            raise DRFValidationError(convertir_erreur_django(exc))
+        return Response(SessionImmersionSerializer(session).data)
+
     @action(detail=True, methods=["post"], url_path="archiver")
     def archiver(self, request, pk=None):
         return self.executer_action_session(SessionImmersionService.archiver_session)
@@ -273,16 +291,21 @@ class SessionImmersionViewSet(viewsets.ModelViewSet):
 
 
 class ParametreSessionViewSet(
+    mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
-    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
     """API de consultation et modification des paramètres de session."""
 
     serializer_class = ParametreSessionSerializer
     permission_classes = [PermissionParametreSession]
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return ParametreSessionCreateSerializer
+        return ParametreSessionSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "session__nom",
@@ -355,15 +378,15 @@ class ParametreSessionViewSet(
 
         return queryset
 
-    def perform_update(self, serializer):
+    def perform_create(self, serializer):
         try:
             serializer.save()
         except DjangoValidationError as exc:
             raise DRFValidationError(convertir_erreur_django(exc))
 
-    def perform_destroy(self, instance):
+    def perform_update(self, serializer):
         try:
-            ParametreSessionService.supprimer_logiquement(instance)
+            serializer.save()
         except DjangoValidationError as exc:
             raise DRFValidationError(convertir_erreur_django(exc))
 
@@ -377,4 +400,14 @@ class ParametreSessionViewSet(
             many=True,
             context=self.get_serializer_context(),
         )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SessionsOuvertesPubliquesAPIView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        queryset = SessionImmersionRepository.sessions_ouvertes_aux_inscriptions()
+        serializer = SessionPubliqueSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)

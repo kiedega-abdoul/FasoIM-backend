@@ -101,7 +101,7 @@ class ParametreSessionSerializer(serializers.ModelSerializer):
 
 
 class SessionImmersionSerializer(serializers.ModelSerializer):
-    parametres = ParametreSessionSerializer(read_only=True)
+    parametres = ParametreSessionSerializer(read_only=True, allow_null=True)
     est_active = serializers.BooleanField(read_only=True)
     est_modifiable = serializers.BooleanField(read_only=True)
     accepte_import = serializers.BooleanField(read_only=True)
@@ -123,6 +123,8 @@ class SessionImmersionSerializer(serializers.ModelSerializer):
             "date_fermeture_inscription",
             "statut",
             "description",
+            "motif_annulation",
+            "date_annulation",
             "parametres",
             "est_active",
             "est_modifiable",
@@ -132,6 +134,10 @@ class SessionImmersionSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "code",
+            "numero_promotion",
+            "statut",
+            "motif_annulation",
+            "date_annulation",
             "est_active",
             "est_modifiable",
             "accepte_import",
@@ -178,48 +184,58 @@ class SessionImmersionSerializer(serializers.ModelSerializer):
     def _validate_coherence_type_public(type_session, public_cible):
         if not type_session or not public_cible:
             return
-
-        if type_session == SessionImmersion.TypeSession.MIXTE:
-            return
-
         correspondances = {
-            SessionImmersion.TypeSession.EXAMEN: [
-                SessionImmersion.PublicCible.BEPC,
-                SessionImmersion.PublicCible.BAC,
-                SessionImmersion.PublicCible.MIXTE,
-            ],
-            SessionImmersion.TypeSession.CONCOURS: [
-                SessionImmersion.PublicCible.CONCOURS,
-                SessionImmersion.PublicCible.MIXTE,
-            ],
-            SessionImmersion.TypeSession.SELECTIONNE: [
-                SessionImmersion.PublicCible.SELECTIONNE,
-                SessionImmersion.PublicCible.MIXTE,
-            ],
-            SessionImmersion.TypeSession.VOLONTAIRE: [
-                SessionImmersion.PublicCible.VOLONTAIRE,
-                SessionImmersion.PublicCible.MIXTE,
-            ],
+            SessionImmersion.TypeSession.EXAMEN: {
+                SessionImmersion.PublicCible.BEPC, SessionImmersion.PublicCible.BAC
+            },
+            SessionImmersion.TypeSession.CONCOURS: {SessionImmersion.PublicCible.CONCOURS},
+            SessionImmersion.TypeSession.SELECTIONNE: {SessionImmersion.PublicCible.SELECTIONNE},
+            SessionImmersion.TypeSession.VOLONTAIRE: {SessionImmersion.PublicCible.VOLONTAIRE},
+            SessionImmersion.TypeSession.MIXTE: {SessionImmersion.PublicCible.MIXTE},
         }
-
-        publics_autorises = correspondances.get(type_session, [])
-        if public_cible not in publics_autorises:
+        if public_cible not in correspondances.get(type_session, set()):
             raise serializers.ValidationError({
                 "public_cible": "Le public cible n'est pas cohérent avec le type de session."
             })
 
 
-class SessionImmersionCreateSerializer(SessionImmersionSerializer):
-    parametres = ParametreSessionInputSerializer(required=False)
 
+class SessionImmersionCreateSerializer(SessionImmersionSerializer):
     class Meta(SessionImmersionSerializer.Meta):
-        read_only_fields = SessionImmersionSerializer.Meta.read_only_fields + [
-            "statut",
-        ]
+        fields = [field for field in SessionImmersionSerializer.Meta.fields if field != "parametres"]
+        read_only_fields = SessionImmersionSerializer.Meta.read_only_fields + ["statut"]
 
     def create(self, validated_data):
-        parametres_data = validated_data.pop("parametres", {})
-        return SessionImmersionService.creer_session_avec_parametres(
-            session_data=validated_data,
-            parametres_data=parametres_data,
-        )
+        return SessionImmersionService.creer_session(validated_data)
+
+
+class ParametreSessionCreateSerializer(ParametreSessionInputSerializer):
+    session = serializers.PrimaryKeyRelatedField(
+        queryset=SessionImmersion.objects.filter(deleted_at__isnull=True),
+    )
+
+    def create(self, validated_data):
+        session = validated_data.pop("session")
+        return ParametreSessionService.configurer_parametres(session, validated_data)
+
+    def to_representation(self, instance):
+        return ParametreSessionSerializer(instance, context=self.context).data
+
+
+class AnnulationSessionSerializer(serializers.Serializer):
+    motif = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=2000)
+
+
+class SessionPubliqueSerializer(serializers.ModelSerializer):
+    type_session_libelle = serializers.CharField(source="get_type_session_display", read_only=True)
+    directives_generales = serializers.CharField(source="parametres.directives_generales", read_only=True)
+    documents_exiges = serializers.ListField(source="parametres.documents_exiges", read_only=True)
+
+    class Meta:
+        model = SessionImmersion
+        fields = [
+            "id", "nom", "code", "type_session", "type_session_libelle",
+            "date_ouverture_inscription", "date_fermeture_inscription",
+            "date_debut", "date_fin", "description",
+            "directives_generales", "documents_exiges",
+        ]

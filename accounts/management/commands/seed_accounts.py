@@ -52,6 +52,8 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("lister_acteurs", "Lister les acteurs", "accounts", "Lister les acteurs selon le périmètre."),
 
     # Accounts - affectations d'acteurs
+    PermissionDefinition("lister_affectations_acteurs", "Lister les affectations", "accounts", "Lister les affectations d'acteurs selon le périmètre."),
+    PermissionDefinition("consulter_affectation_acteur", "Consulter une affectation", "accounts", "Consulter le détail d'une affectation d'acteur."),
     PermissionDefinition("affecter_acteur_session", "Affecter un acteur", "accounts", "Affecter un acteur à un périmètre."),
     PermissionDefinition("retirer_affectation_acteur", "Retirer une affectation", "accounts", "Retirer une affectation d'acteur."),
     PermissionDefinition("suspendre_affectation_acteur", "Suspendre une affectation", "accounts", "Suspendre une affectation d'acteur."),
@@ -94,8 +96,6 @@ PERMISSIONS_SYSTEME = [
     PermissionDefinition("archiver_session", "Archiver une session", "sessions_app", "Archiver une session d'immersion."),
     PermissionDefinition("consulter_session", "Consulter une session", "sessions_app", "Consulter une session selon le périmètre."),
     PermissionDefinition("lister_sessions", "Lister les sessions", "sessions_app", "Lister les sessions selon les droits."),
-    PermissionDefinition("activer_module_session", "Activer un module de session", "sessions_app", "Activer un module dans les paramètres de session."),
-    PermissionDefinition("desactiver_module_session", "Désactiver un module de session", "sessions_app", "Désactiver un module dans les paramètres de session."),
     PermissionDefinition("configurer_parametres_session", "Configurer les paramètres d'une session", "sessions_app", "Configurer les paramètres initiaux d'une session."),
     PermissionDefinition("modifier_parametres_session", "Modifier les paramètres d'une session", "sessions_app", "Modifier les paramètres d'une session."),
     PermissionDefinition("consulter_historique_sessions", "Consulter l'historique des sessions", "sessions_app", "Consulter les sessions supprimées ou archivées."),
@@ -442,6 +442,14 @@ ROLES_SYSTEME = [
 ]
 
 
+PERMISSIONS_AFFECTATIONS_PAR_ROLE = {
+    "ADMINISTRATEUR": {"lister_affectations_acteurs", "consulter_affectation_acteur", "affecter_acteur_session", "retirer_affectation_acteur", "suspendre_affectation_acteur", "reactiver_affectation_acteur", "attribuer_role", "retirer_role", "attribuer_permission_directe", "retirer_permission_directe"},
+    "DGAS": {"lister_affectations_acteurs", "consulter_affectation_acteur", "affecter_acteur_session", "retirer_affectation_acteur", "suspendre_affectation_acteur", "reactiver_affectation_acteur", "attribuer_role", "retirer_role", "attribuer_permission_directe", "retirer_permission_directe"},
+    "DIRECTEUR_REGIONAL": {"lister_affectations_acteurs", "consulter_affectation_acteur", "affecter_acteur_session", "suspendre_affectation_acteur", "reactiver_affectation_acteur", "attribuer_role", "retirer_role"},
+    "RESPONSABLE_CENTRE": {"lister_affectations_acteurs", "consulter_affectation_acteur"},
+}
+
+
 PERMISSIONS_INCIDENTS_PAR_ROLE = {
     "ADMINISTRATEUR": {
         "signaler_incident",
@@ -623,6 +631,8 @@ class Command(BaseCommand):
         permissions_mises_a_jour = 0
         roles_crees = 0
         roles_mis_a_jour = 0
+        associations_affectations_creees = 0
+        associations_affectations_mises_a_jour = 0
         associations_incidents_creees = 0
         associations_incidents_mises_a_jour = 0
         associations_audit_creees = 0
@@ -681,6 +691,21 @@ class Command(BaseCommand):
                 roles_crees += 1
             else:
                 roles_mis_a_jour += 1
+
+        for code_role, codes_permissions in PERMISSIONS_AFFECTATIONS_PAR_ROLE.items():
+            role = Role.objects.get(code=code_role, deleted_at__isnull=True)
+            permissions = Permission.objects.filter(code__in=codes_permissions, module="accounts", statut=Permission.Statut.ACTIVE, deleted_at__isnull=True)
+            for permission in permissions:
+                _, created = RolePermission.objects.update_or_create(
+                    role=role,
+                    permission=permission,
+                    deleted_at__isnull=True,
+                    defaults={"est_delegable": False, "perimetre_delegation_max": role.perimetre_autorise, "statut": RolePermission.Statut.ACTIVE, "deleted_at": None},
+                )
+                if created:
+                    associations_affectations_creees += 1
+                else:
+                    associations_affectations_mises_a_jour += 1
 
         for code_role, codes_permissions in PERMISSIONS_INCIDENTS_PAR_ROLE.items():
             role = Role.objects.get(code=code_role, deleted_at__isnull=True)
@@ -787,6 +812,8 @@ class Command(BaseCommand):
         self.stdout.write(f"Permissions mises à jour : {permissions_mises_a_jour}")
         self.stdout.write(f"Rôles créés : {roles_crees}")
         self.stdout.write(f"Rôles mis à jour : {roles_mis_a_jour}")
+        self.stdout.write(f"Associations affectations créées : {associations_affectations_creees}")
+        self.stdout.write(f"Associations affectations mises à jour : {associations_affectations_mises_a_jour}")
         self.stdout.write(
             f"Associations incidents créées : {associations_incidents_creees}"
         )

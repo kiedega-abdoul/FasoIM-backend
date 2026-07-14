@@ -58,6 +58,12 @@ class SessionImmersionRepository:
                 ParametreSession.ModeEntree.INSCRIPTION,
                 ParametreSession.ModeEntree.MIXTE,
             ],
+            parametres__consultation_publique_active=True,
+            parametres__deleted_at__isnull=True,
+            type_session__in=[
+                SessionImmersion.TypeSession.VOLONTAIRE,
+                SessionImmersion.TypeSession.MIXTE,
+            ],
         )
 
 

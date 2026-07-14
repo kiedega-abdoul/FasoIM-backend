@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views import ParametreSessionViewSet, SessionImmersionViewSet
+from .views import ParametreSessionViewSet, SessionImmersionViewSet, SessionsOuvertesPubliquesAPIView
 
 
 app_name = "sessions_app"

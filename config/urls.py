@@ -6,6 +6,8 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from sessions_app.views import SessionsOuvertesPubliquesAPIView
+
 
 def health_check(request):
     return JsonResponse({
@@ -21,6 +23,11 @@ urlpatterns = [
 
     # Module sessions
     path("api/sessions/", include("sessions_app.urls")),
+    path(
+        "api/public/sessions/ouvertes-inscription/",
+        SessionsOuvertesPubliquesAPIView.as_view(),
+        name="sessions-ouvertes-publiques",
+    ),
     path("api/accounts/", include("accounts.urls")),
     path("api/imports/", include("imports_app.urls")),
     path("api/immerges/", include("immerges.urls")),

@@ -135,6 +135,7 @@ class PermissionSessionImmersion(PermissionSessionsBase):
         "demarrer": "modifier_session",
         "terminer": "cloturer_session",
         "archiver": "archiver_session",
+        "annuler": "modifier_session",
         "ouvertes_inscription": "lister_sessions",
         "historique": "consulter_historique_sessions",
     }
@@ -144,13 +145,21 @@ class PermissionParametreSession(PermissionSessionsBase):
     """Controle les actions API sur parametres_session."""
 
     action_permission_map = {
+        "create": "configurer_parametres_session",
         "list": "consulter_session",
         "retrieve": "consulter_session",
         "update": "modifier_parametres_session",
         "partial_update": "modifier_parametres_session",
-        "destroy": "modifier_parametres_session",
         "historique": "consulter_historique_parametres_session",
     }
+
+    def has_permission(self, request, view):
+        # La suppression directe n'existe pas sur ce ViewSet.
+        # On laisse Django REST Framework répondre 405 Method Not Allowed.
+        if request.method == "DELETE" and not hasattr(view, "destroy"):
+            return True
+
+        return super().has_permission(request, view)
 
 
 def extraire_perimetre_session(request, view=None, obj=None):

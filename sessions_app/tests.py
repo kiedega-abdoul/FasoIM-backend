@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
+from django.utils import timezone
 
 from accounts.models import AffectationActeur, AffectationRole, Permission, Role, RolePermission
 
@@ -71,9 +72,13 @@ class SessionImmersionAPITests(APITestCase):
             "lister_sessions",
             "consulter_session",
             "creer_session",
+            "configurer_parametres_session",
             "modifier_session",
             "archiver_session",
             "modifier_parametres_session",
+            "cloturer_session",
+            "consulter_historique_sessions",
+            "consulter_historique_parametres_session",
         ]
         for code in codes_permissions:
             permission, _ = Permission.objects.get_or_create(
@@ -157,8 +162,8 @@ class SessionImmersionAPITests(APITestCase):
             parametres_data=parametres_data,
         )
 
-    def test_creer_session_avec_parametres(self):
-        payload = {
+    def test_creer_session_puis_configurer_parametres(self):
+        payload_session = {
             "nom": "Session BAC 2026",
             "annee": 2026,
             "numero_promotion": 2,
@@ -169,32 +174,53 @@ class SessionImmersionAPITests(APITestCase):
             "date_ouverture_inscription": "2026-07-01",
             "date_fermeture_inscription": "2026-07-31",
             "description": "Session BAC créée depuis l'API.",
-            "parametres": {
-                "mode_entree": ParametreSession.ModeEntree.MIXTE,
-                "hebergement_active": True,
-                "repas_active": True,
-                "visite_medicale_active": True,
-                "evaluation_active": False,
-                "attestation_active": True,
-                "consultation_publique_active": True,
-                "taux_presence_minimum_attestation": "80.00",
-                "directives_generales": "Se présenter avec une pièce d'identité.",
-                "consignes_generales": "Respect strict du règlement intérieur.",
-                "documents_exiges": ["CNIB", "Convocation"],
-            },
         }
 
-        reponse = self.client.post("/api/sessions/sessions/", payload, format="json")
+        reponse_session = self.client.post(
+            "/api/sessions/sessions/",
+            payload_session,
+            format="json",
+        )
 
-        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+        self.assertEqual(reponse_session.status_code, status.HTTP_201_CREATED, reponse_session.data)
         self.assertEqual(SessionImmersion.objects.count(), 1)
-        self.assertEqual(ParametreSession.objects.count(), 1)
-        self.assertTrue(reponse.data.get("code"))
-        self.assertEqual(reponse.data["statut"], SessionImmersion.Statut.BROUILLON)
-        self.assertEqual(reponse.data["parametres"]["mode_entree"], ParametreSession.ModeEntree.MIXTE)
+        self.assertEqual(ParametreSession.objects.count(), 0)
+        self.assertTrue(reponse_session.data.get("code"))
+        self.assertEqual(reponse_session.data["statut"], SessionImmersion.Statut.BROUILLON)
+        self.assertNotIn("parametres", reponse_session.data)
+        self.assert_champs_techniques_absents(self, reponse_session.data)
 
-        self.assert_champs_techniques_absents(self, reponse.data)
-        self.assert_champs_techniques_absents(self, reponse.data["parametres"])
+        payload_parametres = {
+            "session": reponse_session.data["id"],
+            "mode_entree": ParametreSession.ModeEntree.MIXTE,
+            "hebergement_active": True,
+            "repas_active": True,
+            "visite_medicale_active": True,
+            "evaluation_active": False,
+            "attestation_active": True,
+            "consultation_publique_active": True,
+            "taux_presence_minimum_attestation": "80.00",
+            "directives_generales": "Se présenter avec une pièce d'identité.",
+            "consignes_generales": "Respect strict du règlement intérieur.",
+            "documents_exiges": ["CNIB", "Convocation"],
+        }
+        reponse_parametres = self.client.post(
+            "/api/sessions/parametres/",
+            payload_parametres,
+            format="json",
+        )
+
+        self.assertEqual(
+            reponse_parametres.status_code,
+            status.HTTP_201_CREATED,
+            reponse_parametres.data,
+        )
+        self.assertEqual(ParametreSession.objects.count(), 1)
+        self.assertEqual(
+            reponse_parametres.data["mode_entree"],
+            ParametreSession.ModeEntree.MIXTE,
+        )
+        self.assert_champs_techniques_absents(self, reponse_parametres.data)
 
     def test_lister_sessions_et_filtrer_par_champs_session_et_parametres(self):
         session_bac = self.creer_session(
@@ -297,3 +323,80 @@ class SessionImmersionAPITests(APITestCase):
             public_cible=SessionImmersion.PublicCible.BAC,
             mode_entree=ParametreSession.ModeEntree.IMPORT,
         )
+
+        reponse = self.client.get("/api/sessions/sessions/historique/")
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+
+    def test_transition_invalide_est_refusee(self):
+        session = self.creer_session(
+            nom="Session transition", annee=2026,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BAC,
+            mode_entree=ParametreSession.ModeEntree.IMPORT,
+        )
+        reponse = self.client.post(f"/api/sessions/sessions/{session.id}/demarrer/")
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST, reponse.data)
+        session.refresh_from_db()
+        self.assertEqual(session.statut, SessionImmersion.Statut.BROUILLON)
+
+    def test_annulation_exige_un_motif_et_conserve_la_session(self):
+        session = self.creer_session(
+            nom="Session annulation", annee=2026,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+        )
+        sans_motif = self.client.post(f"/api/sessions/sessions/{session.id}/annuler/", {}, format="json")
+        self.assertEqual(sans_motif.status_code, status.HTTP_400_BAD_REQUEST)
+        reponse = self.client.post(
+            f"/api/sessions/sessions/{session.id}/annuler/",
+            {"motif": "Décision officielle."}, format="json",
+        )
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        session.refresh_from_db()
+        self.assertEqual(session.statut, SessionImmersion.Statut.ANNULEE)
+        self.assertIsNone(session.deleted_at)
+        self.assertEqual(session.motif_annulation, "Décision officielle.")
+
+    def test_parametres_ne_peuvent_pas_etre_supprimes_directement(self):
+        session = self.creer_session(
+            nom="Session paramètres", annee=2026,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BEPC,
+            mode_entree=ParametreSession.ModeEntree.IMPORT,
+        )
+        reponse = self.client.delete(f"/api/sessions/parametres/{session.parametres.id}/")
+        self.assertEqual(reponse.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_public_cible_incoherent_est_refuse(self):
+        payload = {
+            "nom": "Session incohérente", "annee": 2026,
+            "type_session": SessionImmersion.TypeSession.CONCOURS,
+            "public_cible": SessionImmersion.PublicCible.MIXTE,
+            "date_debut": "2026-08-01", "date_fin": "2026-08-30",
+        }
+        reponse = self.client.post("/api/sessions/sessions/", payload, format="json")
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST, reponse.data)
+
+    def test_route_publique_expose_seulement_les_informations_utiles(self):
+        aujourd_hui = timezone.localdate()
+        session = self.creer_session(
+            nom="Session volontaire publique", annee=aujourd_hui.year,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+            date_debut=aujourd_hui + timedelta(days=10),
+            date_fin=aujourd_hui + timedelta(days=40),
+            date_ouverture_inscription=aujourd_hui - timedelta(days=1),
+            date_fermeture_inscription=aujourd_hui + timedelta(days=5),
+        )
+        SessionImmersionService.ouvrir_session(session)
+        self.client.force_authenticate(user=None)
+        reponse = self.client.get("/api/public/sessions/ouvertes-inscription/")
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        self.assertEqual(len(reponse.data), 1)
+        donnees = reponse.data[0]
+        self.assertEqual(donnees["id"], session.id)
+        self.assertNotIn("parametres", donnees)
+        self.assertNotIn("statut", donnees)
+        self.assertNotIn("taux_presence_minimum_attestation", donnees)

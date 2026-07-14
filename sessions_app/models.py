@@ -22,7 +22,7 @@ def calculer_numero_promotion(annee):
     - 2026 correspond à la promotion 2 ;
     - 2027 correspond à la promotion 3.
 
-    L'utilisateur peut toujours saisir manuellement un autre numéro de promotion.
+    Le numéro est calculé automatiquement à partir de l'année.
     """
     if annee >= ANNEE_PREMIERE_PROMOTION:
         return NUMERO_PREMIERE_PROMOTION + (annee - ANNEE_PREMIERE_PROMOTION)
@@ -74,15 +74,15 @@ class SessionImmersion(models.Model):
     annee = models.PositiveIntegerField(
         default=annee_courante,
         validators=[
-            MinValueValidator(2020),
-            MaxValueValidator(10000),
+            MinValueValidator(2025),
+            MaxValueValidator(2100),
         ],
     )
     numero_promotion = models.PositiveIntegerField(
         default=numero_promotion_par_defaut,
         validators=[
             MinValueValidator(1),
-            MaxValueValidator(99999),
+            MaxValueValidator(99),
         ],
         help_text="Par défaut : 2025 = promotion 1, 2026 = promotion 2, etc.",
     )
@@ -108,6 +108,8 @@ class SessionImmersion(models.Model):
         db_index=True,
     )
     description = models.TextField(blank=True)
+    motif_annulation = models.TextField(blank=True)
+    date_annulation = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -120,8 +122,8 @@ class SessionImmersion(models.Model):
         verbose_name_plural = "Sessions d'immersion"
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(annee__gte=2020) & models.Q(annee__lte=2100),
-                name="sessions_immersion_annee_2020_2100",
+                condition=models.Q(annee__gte=2025) & models.Q(annee__lte=2100),
+                name="sessions_immersion_annee_2025_2100",
             ),
             models.CheckConstraint(
                 condition=(
@@ -186,8 +188,21 @@ class SessionImmersion(models.Model):
     def clean(self):
         super().clean()
 
-        if self.numero_promotion is None:
+        if self.annee is not None:
             self.numero_promotion = calculer_numero_promotion(self.annee)
+
+        correspondances = {
+            self.TypeSession.EXAMEN: {self.PublicCible.BEPC, self.PublicCible.BAC},
+            self.TypeSession.CONCOURS: {self.PublicCible.CONCOURS},
+            self.TypeSession.SELECTIONNE: {self.PublicCible.SELECTIONNE},
+            self.TypeSession.VOLONTAIRE: {self.PublicCible.VOLONTAIRE},
+            self.TypeSession.MIXTE: {self.PublicCible.MIXTE},
+        }
+        if self.type_session and self.public_cible:
+            if self.public_cible not in correspondances.get(self.type_session, set()):
+                raise ValidationError({
+                    "public_cible": "Le public cible n'est pas cohérent avec le type de session."
+                })
 
         if self.date_debut and self.date_fin and self.date_fin < self.date_debut:
             raise ValidationError({
@@ -206,7 +221,7 @@ class SessionImmersion(models.Model):
             })
 
     def save(self, *args, **kwargs):
-        if self.numero_promotion is None:
+        if self.annee is not None:
             self.numero_promotion = calculer_numero_promotion(self.annee)
 
         if not self.code:

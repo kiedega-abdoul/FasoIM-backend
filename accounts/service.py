@@ -18,6 +18,7 @@ from .models import (
     Role,
     RolePermission,
 )
+from .access_context import obtenir_affectation_courante_id
 from .repository import (
     ActeurRepository,
     AffectationActeurRepository,
@@ -558,6 +559,56 @@ class AffectationRoleService(ServiceBase):
         if AffectationRoleRepository.role_deja_attribue(affectation, role):
             raise ValidationError("Ce rôle est déjà attribué à cette affectation.")
 
+        rangs_perimetres = {
+            Role.Perimetre.CENTRE: 1,
+            Role.Perimetre.REGION: 2,
+            Role.Perimetre.NATIONAL: 3,
+            Role.Perimetre.PLATEFORME: 4,
+        }
+
+        rang_role = rangs_perimetres.get(role.perimetre_autorise, 0)
+        rang_affectation = rangs_perimetres.get(affectation.niveau_affectation, 0)
+
+        if rang_role > rang_affectation:
+            raise ValidationError(
+                "Le rôle possède un périmètre plus large que l'affectation."
+            )
+
+        if attribue_par is not None and not getattr(attribue_par, "is_superuser", False):
+            affectation_source_id = obtenir_affectation_courante_id()
+            affectation_source = None
+            if affectation_source_id not in (None, -1):
+                affectation_source = AffectationActeurRepository.get_active_by_id(affectation_source_id)
+            if affectation_source is None or affectation_source.acteur_id != attribue_par.id:
+                raise ValidationError(
+                    "Choisissez une affectation de travail valide avant d'attribuer un rôle."
+                )
+
+            resultat = ControleAccesService.acteur_peut(
+                attribue_par,
+                "attribuer_role",
+                affectation=affectation_source,
+                session_id=affectation.session_id,
+                region_code=affectation.region_code or None,
+                centre_id=affectation.centre_id,
+            )
+            if not resultat.autorise:
+                raise ValidationError(
+                    "Votre affectation courante ne permet pas d'attribuer un rôle sur ce périmètre."
+                )
+
+            niveaux_source = list(
+                AffectationRole.objects.filter(
+                    affectation_acteur=affectation_source,
+                    statut=AffectationRole.Statut.ACTIF,
+                    deleted_at__isnull=True,
+                ).values_list("role__niveau", flat=True)
+            )
+            if not niveaux_source or role.niveau <= min(niveaux_source):
+                raise ValidationError(
+                    "Vous ne pouvez attribuer qu'un rôle inférieur à votre propre niveau hiérarchique."
+                )
+
         attribution = AffectationRole(
             affectation_acteur=affectation,
             role=role,
@@ -614,13 +665,17 @@ class AffectationPermissionService(ServiceBase):
         if AffectationPermissionRepository.permission_deja_attribuee(affectation, permission):
             raise ValidationError("Cette permission directe est déjà attribuée à cette affectation.")
 
+        motif_normalise = AffectationPermissionService.normaliser_texte(motif)
+        if not motif_normalise:
+            raise ValidationError("Le motif est obligatoire pour une permission directe.")
+
         attribution = AffectationPermission(
             affectation_acteur=affectation,
             permission=permission,
             date_attribution=date_attribution or AffectationPermissionService.aujourd_hui(),
             date_expiration=date_expiration,
             est_delegable=est_delegable,
-            motif=AffectationPermissionService.normaliser_texte(motif),
+            motif=motif_normalise,
             statut=AffectationPermission.Statut.ACTIVE,
             attribue_par=attribue_par,
         )
@@ -793,6 +848,26 @@ class ControleAccesService(ServiceBase):
     """
 
     REGLES_PERMISSIONS_IMPLICITES = (
+        # Gestion des sessions : les actions ouvrent l'interface principale.
+        (
+            {
+                "creer_session", "modifier_session", "cloturer_session",
+                "archiver_session", "configurer_parametres_session",
+                "modifier_parametres_session", "consulter_historique_sessions",
+                "consulter_historique_parametres_session",
+            },
+            {"lister_sessions"},
+        ),
+        # Toute action sur une session existante nécessite sa fiche.
+        (
+            {
+                "modifier_session", "cloturer_session", "archiver_session",
+                "configurer_parametres_session", "modifier_parametres_session",
+                "consulter_historique_sessions",
+                "consulter_historique_parametres_session",
+            },
+            {"consulter_session"},
+        ),
         # Gestion des acteurs : toute action du groupe ouvre la liste.
         (
             {
@@ -814,10 +889,11 @@ class ControleAccesService(ServiceBase):
             },
             {"consulter_acteur"},
         ),
-        # Gestion des affectations : l'API actuelle utilise les permissions
-        # acteur pour lister et consulter les affectations.
+        # Gestion des affectations : toute action ouvre la liste et le détail.
         (
             {
+                "lister_affectations_acteurs",
+                "consulter_affectation_acteur",
                 "affecter_acteur_session",
                 "retirer_affectation_acteur",
                 "suspendre_affectation_acteur",
@@ -827,7 +903,7 @@ class ControleAccesService(ServiceBase):
                 "attribuer_permission_directe",
                 "retirer_permission_directe",
             },
-            {"lister_acteurs", "consulter_acteur"},
+            {"lister_affectations_acteurs", "consulter_affectation_acteur"},
         ),
         # Gestion des rôles : toute action du groupe ouvre la liste.
         (
@@ -928,6 +1004,22 @@ class ControleAccesService(ServiceBase):
             return ResultatControleAcces(False, "Acteur introuvable ou inactif.")
 
         affectations = AffectationActeurRepository.lister_actives_par_acteur(acteur)
+
+        # Une requête API doit rester dans le contexte choisi par l'acteur.
+        # Si aucun contexte n'est transmis et que l'acteur n'a qu'une seule
+        # affectation active, celle-ci peut être utilisée sans ambiguïté.
+        if affectation is None:
+            affectation_contexte_id = obtenir_affectation_courante_id()
+            if affectation_contexte_id == -1:
+                return ResultatControleAcces(False, "Identifiant d'affectation courante invalide.")
+            if affectation_contexte_id is not None:
+                affectation = affectation_contexte_id
+            elif affectations.count() > 1:
+                return ResultatControleAcces(
+                    False,
+                    "Choisissez une affectation de travail avant d'effectuer cette action.",
+                )
+
         if affectation is not None:
             affectations = affectations.filter(id=ControleAccesService.identifiant(affectation))
 

@@ -233,8 +233,8 @@ class PermissionAffectationActeur(PermissionAccountsBase):
     """Contrôle les actions API sur affectations_acteurs."""
 
     action_permission_map = {
-        "list": "lister_acteurs",
-        "retrieve": "consulter_acteur",
+        "list": "lister_affectations_acteurs",
+        "retrieve": "consulter_affectation_acteur",
         "create": "affecter_acteur_session",
         "references": "affecter_acteur_session",
         "update": "suspendre_affectation_acteur",

@@ -7,17 +7,50 @@ from django.utils import timezone
 from .models import ParametreSession, SessionImmersion
 
 
+class VerificationClotureSessionService:
+    """Orchestrateur global de clôture porté par sessions_app.
+
+    Les modules restent responsables de leurs propres contrôles. Le service
+    documents existant est utilisé comme vérificateur de compatibilité tant que
+    les contrôles seront progressivement séparés par application.
+    """
+
+    @classmethod
+    def verifier(cls, session):
+        from documents.service import SessionClotureService as VerificateurModulesService
+
+        return VerificateurModulesService.verifier(session)
+
+
 class SessionImmersionService:
-    """Logique métier liée aux sessions d'immersion."""
+    TRANSITIONS_AUTORISEES = {
+        SessionImmersion.Statut.BROUILLON: {
+            SessionImmersion.Statut.OUVERTE,
+            SessionImmersion.Statut.EN_PREPARATION,
+            SessionImmersion.Statut.ANNULEE,
+        },
+        SessionImmersion.Statut.OUVERTE: {
+            SessionImmersion.Statut.EN_PREPARATION,
+            SessionImmersion.Statut.EN_COURS,
+            SessionImmersion.Statut.ANNULEE,
+        },
+        SessionImmersion.Statut.EN_PREPARATION: {
+            SessionImmersion.Statut.OUVERTE,
+            SessionImmersion.Statut.EN_COURS,
+            SessionImmersion.Statut.ANNULEE,
+        },
+        SessionImmersion.Statut.EN_COURS: {
+            SessionImmersion.Statut.TERMINEE,
+            SessionImmersion.Statut.ANNULEE,
+        },
+        SessionImmersion.Statut.TERMINEE: {SessionImmersion.Statut.ARCHIVEE},
+        SessionImmersion.Statut.ARCHIVEE: set(),
+        SessionImmersion.Statut.ANNULEE: set(),
+    }
+    CHAMPS_MODIFIABLES_EN_COURS = {"description"}
 
     @staticmethod
     def _generer_code_brouille(objet_id, ancien_code):
-        """
-        Brouille un champ unique avant suppression logique.
-
-        Objectif : conserver l'historique sans bloquer la recréation d'une session
-        avec les mêmes données métier.
-        """
         identifiant = objet_id or "X"
         suffixe = uuid4().hex[:8].upper()
         ancien = (ancien_code or "SESSION")[:20]
@@ -29,250 +62,219 @@ class SessionImmersionService:
             raise ValidationError("Cette session est supprimée logiquement.")
 
     @staticmethod
-    def verifier_session_modifiable(session):
+    def verifier_session_modifiable(session, champs=None):
         SessionImmersionService.verifier_session_non_supprimee(session)
+        if session.statut in {
+            SessionImmersion.Statut.TERMINEE,
+            SessionImmersion.Statut.ARCHIVEE,
+            SessionImmersion.Statut.ANNULEE,
+        }:
+            raise ValidationError("Cette session n'est plus modifiable dans son statut actuel.")
+        if session.statut == SessionImmersion.Statut.EN_COURS:
+            champs_interdits = set(champs or ()) - SessionImmersionService.CHAMPS_MODIFIABLES_EN_COURS
+            if champs_interdits:
+                raise ValidationError({
+                    "session": "Pendant une session en cours, seule la description peut être modifiée.",
+                    "champs_interdits": sorted(champs_interdits),
+                })
 
-        if not session.est_modifiable:
-            raise ValidationError(
-                "Cette session n'est plus modifiable dans son statut actuel."
-            )
+    @staticmethod
+    @transaction.atomic
+    def creer_session(session_data):
+        session_data = dict(session_data or {})
+        session_data.pop("code", None)
+        session_data.pop("numero_promotion", None)
+        session = SessionImmersion(**session_data)
+        session.save()
+        return session
 
     @staticmethod
     @transaction.atomic
     def creer_session_avec_parametres(session_data, parametres_data=None):
-        """
-        Crée une session et ses paramètres par défaut.
-
-        Le code technique de session est généré par le modèle.
-        Le code FasoIM des immergés sera généré plus tard dans le module immerges.
-        """
-        session_data = dict(session_data or {})
-        parametres_data = dict(parametres_data or {})
-
-        # Le code de session est généré par le système, pas saisi par l'utilisateur.
-        session_data.pop("code", None)
-
-        session = SessionImmersion(**session_data)
-        session.save()
-
-        parametres = ParametreSession(
-            session=session,
-            **parametres_data,
+        """Compatibilité interne : crée la session puis ses paramètres."""
+        session = SessionImmersionService.creer_session(session_data)
+        ParametreSessionService.configurer_parametres(
+            session,
+            dict(parametres_data or {}),
         )
-        parametres.save()
-
         return session
 
     @staticmethod
     @transaction.atomic
     def modifier_session(session, session_data):
-        SessionImmersionService.verifier_session_modifiable(session)
-
         session_data = dict(session_data or {})
-        session_data.pop("code", None)
-        session_data.pop("deleted_at", None)
-        session_data.pop("created_at", None)
-        session_data.pop("updated_at", None)
-
+        for champ in {"code", "numero_promotion", "statut", "motif_annulation", "date_annulation", "deleted_at", "created_at", "updated_at"}:
+            session_data.pop(champ, None)
+        SessionImmersionService.verifier_session_modifiable(session, session_data.keys())
         for champ, valeur in session_data.items():
             setattr(session, champ, valeur)
-
         session.save()
         return session
 
-    @staticmethod
-    def changer_statut(session, nouveau_statut):
-        SessionImmersionService.verifier_session_non_supprimee(session)
+    @classmethod
+    def changer_statut(cls, session, nouveau_statut):
+        cls.verifier_session_non_supprimee(session)
+        if nouveau_statut == session.statut:
+            return session
+        autorises = cls.TRANSITIONS_AUTORISEES.get(session.statut, set())
+        if nouveau_statut not in autorises:
+            raise ValidationError({
+                "statut": f"Transition interdite : {session.statut} vers {nouveau_statut}."
+            })
+        if nouveau_statut in {
+            SessionImmersion.Statut.EN_PREPARATION,
+            SessionImmersion.Statut.OUVERTE,
+            SessionImmersion.Statut.EN_COURS,
+        } and not ParametreSession.objects.filter(
+            session=session,
+            deleted_at__isnull=True,
+        ).exists():
+            raise ValidationError({
+                "parametres": "Configurez les paramètres de la session avant de changer son statut."
+            })
 
-        statuts_valides = [choix[0] for choix in SessionImmersion.Statut.choices]
-        if nouveau_statut not in statuts_valides:
-            raise ValidationError("Statut de session invalide.")
-
-        if (
-            nouveau_statut == SessionImmersion.Statut.TERMINEE
-            and session.statut != SessionImmersion.Statut.TERMINEE
-        ):
-            # Import local pour éviter une dépendance circulaire au chargement.
-            from documents.service import SessionClotureService
-
-            etat = SessionClotureService.verifier(session)
+        if nouveau_statut == SessionImmersion.Statut.TERMINEE:
+            etat = VerificationClotureSessionService.verifier(session)
             if not etat.cloturable:
                 raise ValidationError({
-                    "session": "La session ne peut pas être terminée tant que des opérations dépendantes restent ouvertes.",
+                    "session": "La session ne peut pas être terminée tant que des opérations restent ouvertes.",
                     "blocages": etat.blocages,
                 })
-
         session.statut = nouveau_statut
         session.save(update_fields=["statut", "updated_at"])
         return session
 
-    @staticmethod
-    def ouvrir_session(session):
-        return SessionImmersionService.changer_statut(
-            session,
-            SessionImmersion.Statut.OUVERTE,
-        )
+    @classmethod
+    def ouvrir_session(cls, session):
+        return cls.changer_statut(session, SessionImmersion.Statut.OUVERTE)
 
-    @staticmethod
-    def mettre_en_preparation(session):
-        return SessionImmersionService.changer_statut(
-            session,
-            SessionImmersion.Statut.EN_PREPARATION,
-        )
+    @classmethod
+    def mettre_en_preparation(cls, session):
+        return cls.changer_statut(session, SessionImmersion.Statut.EN_PREPARATION)
 
-    @staticmethod
-    def demarrer_session(session):
-        return SessionImmersionService.changer_statut(
-            session,
-            SessionImmersion.Statut.EN_COURS,
-        )
+    @classmethod
+    def demarrer_session(cls, session):
+        return cls.changer_statut(session, SessionImmersion.Statut.EN_COURS)
 
-    @staticmethod
-    def terminer_session(session):
-        return SessionImmersionService.changer_statut(
-            session,
-            SessionImmersion.Statut.TERMINEE,
-        )
+    @classmethod
+    def terminer_session(cls, session):
+        return cls.changer_statut(session, SessionImmersion.Statut.TERMINEE)
 
-    @staticmethod
-    def archiver_session(session):
-        return SessionImmersionService.changer_statut(
-            session,
-            SessionImmersion.Statut.ARCHIVEE,
-        )
+    @classmethod
+    def archiver_session(cls, session):
+        return cls.changer_statut(session, SessionImmersion.Statut.ARCHIVEE)
 
-    @staticmethod
+    @classmethod
     @transaction.atomic
-    def supprimer_logiquement(session):
-        """
-        Supprime logiquement une session.
+    def annuler_session(cls, session, motif):
+        motif = (motif or "").strip()
+        if not motif:
+            raise ValidationError({"motif": "Le motif d'annulation est obligatoire."})
+        cls.changer_statut(session, SessionImmersion.Statut.ANNULEE)
+        session.motif_annulation = motif
+        session.date_annulation = timezone.now()
+        session.save(update_fields=["motif_annulation", "date_annulation", "updated_at"])
+        return session
 
-        Règles :
-        - pas de suppression physique ;
-        - suppression logique en cascade des paramètres ;
-        - brouillage du champ unique code ;
-        - conservation de l'historique métier.
-        """
+    @classmethod
+    @transaction.atomic
+    def supprimer_logiquement(cls, session):
         if session.deleted_at is not None:
             return session
-
+        if session.statut != SessionImmersion.Statut.BROUILLON:
+            raise ValidationError(
+                "Seule une session encore en brouillon peut être supprimée logiquement. "
+                "Pour une session planifiée ou démarrée, utilisez l'annulation métier."
+            )
         maintenant = timezone.now()
-
         parametres = getattr(session, "parametres", None)
         if parametres is not None:
-            ParametreSessionService.supprimer_logiquement(
-                parametres,
-                date_suppression=maintenant,
-            )
-
-        ancien_code = session.code
-        session.code = SessionImmersionService._generer_code_brouille(
-            session.id,
-            ancien_code,
-        )
-        session.statut = SessionImmersion.Statut.ANNULEE
+            ParametreSessionService.supprimer_logiquement(parametres, maintenant)
+        session.code = cls._generer_code_brouille(session.id, session.code)
         session.deleted_at = maintenant
-        session.save(update_fields=["code", "statut", "deleted_at", "updated_at"])
-
+        session.save(update_fields=["code", "deleted_at", "updated_at"])
         return session
 
 
 class ParametreSessionService:
-    """Logique métier liée aux paramètres de session."""
+    CHAMPS_TEXTUELS_EN_COURS = {"directives_generales", "consignes_generales"}
 
     @staticmethod
     def verifier_parametres_non_supprimes(parametres):
         if parametres.deleted_at is not None:
             raise ValidationError("Ces paramètres sont supprimés logiquement.")
-
         if parametres.session.deleted_at is not None:
             raise ValidationError("La session liée à ces paramètres est supprimée.")
 
-    @staticmethod
+    @classmethod
     @transaction.atomic
-    def modifier_parametres(parametres, parametres_data):
-        ParametreSessionService.verifier_parametres_non_supprimes(parametres)
-        SessionImmersionService.verifier_session_modifiable(parametres.session)
+    def configurer_parametres(cls, session, parametres_data):
+        SessionImmersionService.verifier_session_non_supprimee(session)
+        if session.statut != SessionImmersion.Statut.BROUILLON:
+            raise ValidationError(
+                "Les paramètres initiaux doivent être configurés pendant que la session est en brouillon."
+            )
+        if ParametreSession.objects.filter(session=session, deleted_at__isnull=True).exists():
+            raise ValidationError("Les paramètres de cette session sont déjà configurés.")
+        parametres = ParametreSession(session=session, **dict(parametres_data or {}))
+        parametres.save()
+        return parametres
 
-        parametres_data = dict(parametres_data or {})
-        parametres_data.pop("session", None)
-        parametres_data.pop("deleted_at", None)
-        parametres_data.pop("created_at", None)
-        parametres_data.pop("updated_at", None)
-
-        for champ, valeur in parametres_data.items():
+    @classmethod
+    @transaction.atomic
+    def modifier_parametres(cls, parametres, parametres_data):
+        cls.verifier_parametres_non_supprimes(parametres)
+        donnees = dict(parametres_data or {})
+        for champ in {"session", "deleted_at", "created_at", "updated_at"}:
+            donnees.pop(champ, None)
+        session = parametres.session
+        SessionImmersionService.verifier_session_modifiable(session)
+        if session.statut == SessionImmersion.Statut.EN_COURS:
+            interdits = set(donnees) - cls.CHAMPS_TEXTUELS_EN_COURS
+            if interdits:
+                raise ValidationError({
+                    "parametres": "Pendant la session, seules les directives et les consignes peuvent être corrigées.",
+                    "champs_interdits": sorted(interdits),
+                })
+        for champ, valeur in donnees.items():
             setattr(parametres, champ, valeur)
-
         parametres.save()
         return parametres
 
     @staticmethod
-    def import_autorise(session):
-        if session.deleted_at is not None:
-            return False
-
+    def _module_actif(session, champ):
         parametres = getattr(session, "parametres", None)
-        if parametres is None or parametres.deleted_at is not None:
-            return False
+        return bool(session.deleted_at is None and parametres and parametres.deleted_at is None and getattr(parametres, champ))
 
-        return parametres.utilise_import
+    @staticmethod
+    def import_autorise(session):
+        parametres = getattr(session, "parametres", None)
+        return bool(session.deleted_at is None and parametres and parametres.deleted_at is None and parametres.utilise_import)
 
     @staticmethod
     def inscription_volontaire_autorisee(session):
-        if session.deleted_at is not None:
-            return False
-
         parametres = getattr(session, "parametres", None)
-        if parametres is None or parametres.deleted_at is not None:
-            return False
+        return bool(session.deleted_at is None and parametres and parametres.deleted_at is None and parametres.utilise_inscription_volontaire)
 
-        return parametres.utilise_inscription_volontaire
-
-    @staticmethod
-    def hebergement_autorise(session):
-        parametres = getattr(session, "parametres", None)
-        return bool(
-            session.deleted_at is None
-            and parametres is not None
-            and parametres.deleted_at is None
-            and parametres.hebergement_active
-        )
-
-    @staticmethod
-    def repas_autorise(session):
-        parametres = getattr(session, "parametres", None)
-        return bool(
-            session.deleted_at is None
-            and parametres is not None
-            and parametres.deleted_at is None
-            and parametres.repas_active
-        )
-
-    @staticmethod
-    def visite_medicale_autorisee(session):
-        parametres = getattr(session, "parametres", None)
-        return bool(
-            session.deleted_at is None
-            and parametres is not None
-            and parametres.deleted_at is None
-            and parametres.visite_medicale_active
-        )
-
-    @staticmethod
-    def attestation_autorisee(session):
-        parametres = getattr(session, "parametres", None)
-        return bool(
-            session.deleted_at is None
-            and parametres is not None
-            and parametres.deleted_at is None
-            and parametres.attestation_active
-        )
+    @classmethod
+    def hebergement_autorise(cls, session): return cls._module_actif(session, "hebergement_active")
+    @classmethod
+    def repas_autorise(cls, session): return cls._module_actif(session, "repas_active")
+    @classmethod
+    def visite_medicale_autorisee(cls, session): return cls._module_actif(session, "visite_medicale_active")
+    @classmethod
+    def attestation_autorisee(cls, session): return cls._module_actif(session, "attestation_active")
+    @classmethod
+    def activites_autorisees(cls, session): return cls._module_actif(session, "activites_active")
+    @classmethod
+    def evaluations_autorisees(cls, session): return cls._module_actif(session, "evaluation_active")
+    @classmethod
+    def consultation_publique_autorisee(cls, session): return cls._module_actif(session, "consultation_publique_active")
 
     @staticmethod
     def supprimer_logiquement(parametres, date_suppression=None):
         if parametres.deleted_at is not None:
             return parametres
-
         parametres.deleted_at = date_suppression or timezone.now()
         parametres.save(update_fields=["deleted_at", "updated_at"])
         return parametres

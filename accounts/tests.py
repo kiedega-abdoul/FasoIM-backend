@@ -151,8 +151,8 @@ class AccountsServiceTests(TestCase):
         permissions = ControleAccesService.permissions_effectives(acteur, affectation)
 
         self.assertIn("attribuer_role", permissions)
-        self.assertIn("lister_acteurs", permissions)
-        self.assertIn("consulter_acteur", permissions)
+        self.assertIn("lister_affectations_acteurs", permissions)
+        self.assertIn("consulter_affectation_acteur", permissions)
 
     @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
     def test_permission_role_ouvre_liste_et_detail_roles(self, _mock_cache):
@@ -309,6 +309,7 @@ class AccountsServiceTests(TestCase):
             affectation,
             permission,
             attribue_par=self.admin,
+            motif="Permission directe créée pour tester la suppression en cascade.",
         )
         demande = DemandePermissionService.soumettre_demande(
             acteur=acteur,
