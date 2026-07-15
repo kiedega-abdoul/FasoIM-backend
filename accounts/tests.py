@@ -191,6 +191,72 @@ class AccountsServiceTests(TestCase):
         self.assertIn("consulter_demande_permission", permissions)
         self.assertFalse(ControleAccesService.acteur_peut(acteur, "refuser_demande_permission", affectation=affectation).autorise)
 
+    def test_creer_import_officiel_donne_tout_le_parcours_import(self):
+        permissions = ControleAccesService.ajouter_permissions_implicites(
+            {"creer_import_officiel"}
+        )
+
+        attendues = {
+            "creer_import_officiel",
+            "lister_imports_officiels",
+            "consulter_import_officiel",
+            "modifier_import_officiel",
+            "supprimer_import_officiel",
+            "consulter_champs_attendus_import",
+            "consulter_progression_import",
+            "relancer_lecture_import",
+            "valider_correspondance_import",
+            "valider_lignes_import",
+            "confirmer_import_officiel",
+            "annuler_import_officiel",
+            "consulter_correspondances_import",
+            "consulter_lignes_import",
+            "corriger_ligne_import",
+            "ignorer_ligne_import",
+            "consulter_erreurs_import",
+        }
+
+        self.assertTrue(attendues.issubset(permissions))
+
+    def test_permissions_import_sont_completees_sans_donner_tout_le_module(self):
+        correspondance = ControleAccesService.ajouter_permissions_implicites(
+            {"valider_correspondance_import"}
+        )
+        correction = ControleAccesService.ajouter_permissions_implicites(
+            {"corriger_ligne_import"}
+        )
+        confirmation = ControleAccesService.ajouter_permissions_implicites(
+            {"confirmer_import_officiel"}
+        )
+
+        self.assertTrue(
+            {
+                "lister_imports_officiels",
+                "consulter_import_officiel",
+                "consulter_correspondances_import",
+                "consulter_champs_attendus_import",
+            }.issubset(correspondance)
+        )
+        self.assertTrue(
+            {
+                "lister_imports_officiels",
+                "consulter_import_officiel",
+                "consulter_lignes_import",
+                "consulter_erreurs_import",
+            }.issubset(correction)
+        )
+        self.assertTrue(
+            {
+                "lister_imports_officiels",
+                "consulter_import_officiel",
+                "consulter_progression_import",
+                "consulter_lignes_import",
+                "consulter_erreurs_import",
+            }.issubset(confirmation)
+        )
+        self.assertNotIn("creer_import_officiel", correction)
+        self.assertNotIn("supprimer_import_officiel", confirmation)
+
     @patch("accounts.service.ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit")
     def test_permission_directe_respecte_le_perimetre_region(self, mock_cache):
         acteur = self.creer_acteur()

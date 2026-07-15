@@ -1,5 +1,9 @@
+from django.db.models import Q
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status, viewsets
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
@@ -28,7 +32,7 @@ from .serializers import (
     ProgressionImportSerializer,
     ValiderCorrespondanceImportSerializer,
 )
-from .service import ChampsAttendusImportService, ImportOfficielService
+from .service import ChampsAttendusImportService, ImportOfficielService, LigneImportService
 from .tasks import (
     ProgressionImportService,
     confirmer_import_task,
@@ -105,7 +109,10 @@ class ImportOfficielViewSet(viewsets.ModelViewSet):
         """Relance l'analyse asynchrone des colonnes détectées."""
 
         import_officiel = self.get_object()
-        ImportOfficielService.planifier_lecture_colonnes(import_officiel)
+        try:
+            ImportOfficielService.planifier_lecture_colonnes(import_officiel)
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
         return Response(
             {
                 "detail": "Lecture des colonnes relancée.",
@@ -136,7 +143,10 @@ class ImportOfficielViewSet(viewsets.ModelViewSet):
         """Relance la validation asynchrone des lignes de l'import."""
 
         import_officiel = self.get_object()
-        valider_lignes_import_task.delay(import_officiel.id)
+        try:
+            ImportOfficielService.planifier_validation_lignes(import_officiel)
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
         return Response(
             {"detail": "Validation des lignes lancée.", "import_id": import_officiel.id},
             status=status.HTTP_202_ACCEPTED,
@@ -151,6 +161,10 @@ class ImportOfficielViewSet(viewsets.ModelViewSet):
         """
 
         import_officiel = self.get_object()
+        try:
+            ImportOfficielService.preparer_confirmation(import_officiel.id)
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
         acteur_id = getattr(request.user, "id", None)
         confirmer_import_task.delay(import_officiel.id, confirme_par_id=acteur_id)
         return Response(
@@ -179,18 +193,20 @@ class ImportOfficielViewSet(viewsets.ModelViewSet):
         """Lance la suppression logique massive de l'import et ses dépendances."""
 
         import_officiel = self.get_object()
-        supprimer_import_logiquement_task.delay(import_officiel.id)
+        try:
+            ImportOfficielService.demander_suppression(import_officiel.id)
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
         return Response(
             {"detail": "Suppression logique lancée.", "import_id": import_officiel.id},
             status=status.HTTP_202_ACCEPTED,
         )
 
     def destroy(self, request, *args, **kwargs):
-        """DELETE déclenche aussi la suppression logique asynchrone."""
-
-        import_officiel = self.get_object()
-        supprimer_import_logiquement_task.delay(import_officiel.id)
-        return Response(status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {"detail": "La suppression directe est interdite. Utilisez l'action supprimer-logiquement."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
 
 
 class CorrespondanceColonneImportViewSet(viewsets.ReadOnlyModelViewSet):
@@ -214,11 +230,20 @@ class CorrespondanceColonneImportViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.order_by("import_officiel_id", "ordre", "champ_cible")
 
 
+
+
+class ImportLargeListPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class LigneImportViewSet(viewsets.ReadOnlyModelViewSet):
-    """Consultation et actions simples sur les lignes lues d'un import."""
+    """Consultation paginée et actions sûres sur les lignes d'un import."""
 
     serializer_class = LigneImportSerializer
     permission_classes = [PermissionLigneImport]
+    pagination_class = ImportLargeListPagination
 
     def get_queryset(self):
         params = self.request.query_params
@@ -230,40 +255,89 @@ class LigneImportViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(statut=params.get("statut"))
         if params.get("numero_ligne"):
             queryset = queryset.filter(numero_ligne=params.get("numero_ligne"))
+
+        recherche = (params.get("search") or "").strip()
+        if recherche:
+            filtre = (
+                Q(donnees_normalisees__nom__icontains=recherche)
+                | Q(donnees_normalisees__prenoms__icontains=recherche)
+                | Q(donnees_normalisees__numero_pv__icontains=recherche)
+                | Q(donnees_normalisees__numero_recepisse__icontains=recherche)
+                | Q(donnees_normalisees__matricule__icontains=recherche)
+                | Q(donnees_normalisees__telephone__icontains=recherche)
+                | Q(donnees_normalisees__email__icontains=recherche)
+            )
+            if recherche.isdigit():
+                filtre |= Q(numero_ligne=int(recherche))
+            queryset = queryset.filter(filtre)
+
         return queryset.order_by("import_officiel_id", "numero_ligne")
 
     @action(detail=True, methods=["patch"])
     def corriger(self, request, pk=None):
-        """Enregistre une correction manuelle de ligne.
-
-        La correction remet la ligne en attente. La validation complète reste
-        relancée par Celery, pour éviter de refaire un mini-validateur bancal ici.
-        """
-
         ligne = self.get_object()
         donnees_corrigees = request.data.get("donnees_corrigees") or request.data.get("donnees_normalisees")
         if not isinstance(donnees_corrigees, dict):
-            return Response(
-                {"donnees_corrigees": "Un objet JSON est attendu."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ligne.donnees_normalisees = donnees_corrigees
-        ligne.statut = LigneImport.Statut.EN_ATTENTE
-        ligne.message_statut = "Ligne corrigée manuellement. Revalidation nécessaire."
-        ligne.save(update_fields=["donnees_normalisees", "statut", "message_statut", "updated_at"])
+            return Response({"donnees_corrigees": "Un objet JSON est attendu."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ligne = LigneImportService.corriger(ligne.id, donnees_corrigees)
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
         return Response(self.get_serializer(ligne).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def ignorer(self, request, pk=None):
-        """Marque une ligne comme ignorée."""
-
         ligne = self.get_object()
-        message = request.data.get("message") or "Ligne ignorée manuellement."
-        ligne.statut = LigneImport.Statut.IGNOREE
-        ligne.message_statut = message
-        ligne.save(update_fields=["statut", "message_statut", "updated_at"])
+        try:
+            ligne = LigneImportService.ignorer(ligne.id, request.data.get("message", ""))
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
         return Response(self.get_serializer(ligne).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="ignorer-plusieurs")
+    def ignorer_plusieurs(self, request):
+        import_id = request.data.get("import_id") or request.data.get("import_officiel_id")
+        if not import_id:
+            raise DRFValidationError({"import_id": "L'import est obligatoire."})
+        try:
+            lignes = LigneImportService.ignorer_plusieurs(
+                import_id=int(import_id),
+                ligne_ids=request.data.get("ligne_ids"),
+                motif=request.data.get("motif"),
+            )
+        except (TypeError, ValueError) as erreur:
+            raise DRFValidationError({"import_id": "Identifiant d'import invalide."}) from erreur
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
+        return Response(
+            {
+                "detail": f"{len(lignes)} ligne(s) ignorée(s).",
+                "lignes": self.get_serializer(lignes, many=True).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["post"], url_path="reintegrer-plusieurs")
+    def reintegrer_plusieurs(self, request):
+        import_id = request.data.get("import_id")
+        if not import_id:
+            raise DRFValidationError({"import_id": "L'import est obligatoire."})
+        try:
+            lignes = LigneImportService.reintegrer_plusieurs(
+                import_id=int(import_id),
+                ligne_ids=request.data.get("ligne_ids"),
+            )
+        except (TypeError, ValueError) as erreur:
+            raise DRFValidationError({"import_id": "Identifiant d'import invalide."}) from erreur
+        except DjangoValidationError as erreur:
+            raise DRFValidationError(erreur.message_dict) from erreur
+        return Response(
+            {
+                "detail": f"{len(lignes)} ligne(s) réintégrée(s).",
+                "lignes": self.get_serializer(lignes, many=True).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"])
     def revalider(self, request, pk=None):
@@ -278,10 +352,11 @@ class LigneImportViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ErreurImportViewSet(viewsets.ReadOnlyModelViewSet):
-    """Consultation des erreurs détectées pendant la validation."""
+    """Consultation paginée des erreurs détectées pendant la validation."""
 
     serializer_class = ErreurImportSerializer
     permission_classes = [PermissionErreurImport]
+    pagination_class = ImportLargeListPagination
 
     def get_queryset(self):
         params = self.request.query_params
@@ -297,4 +372,18 @@ class ErreurImportViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(type_erreur=params.get("type_erreur"))
         if params.get("champ_cible"):
             queryset = queryset.filter(champ_cible=params.get("champ_cible"))
+
+        recherche = (params.get("search") or "").strip()
+        if recherche:
+            filtre = (
+                Q(message__icontains=recherche)
+                | Q(valeur_recue__icontains=recherche)
+                | Q(champ_cible__icontains=recherche)
+                | Q(colonne_source__icontains=recherche)
+                | Q(code_erreur__icontains=recherche)
+            )
+            if recherche.isdigit():
+                filtre |= Q(ligne_import__numero_ligne=int(recherche))
+            queryset = queryset.filter(filtre)
+
         return queryset.order_by("import_officiel_id", "ligne_import__numero_ligne", "champ_cible", "id")

@@ -848,6 +848,69 @@ class ControleAccesService(ServiceBase):
     """
 
     REGLES_PERMISSIONS_IMPLICITES = (
+        # Imports officiels : creer_import_officiel est la permission maîtresse.
+        # Elle donne accès à tout le parcours d'import, sans dupliquer ces
+        # associations dans les rôles enregistrés en base.
+        (
+            {"creer_import_officiel"},
+            {
+                "lister_imports_officiels",
+                "consulter_import_officiel",
+                "modifier_import_officiel",
+                "supprimer_import_officiel",
+                "consulter_champs_attendus_import",
+                "consulter_progression_import",
+                "relancer_lecture_import",
+                "valider_correspondance_import",
+                "valider_lignes_import",
+                "confirmer_import_officiel",
+                "annuler_import_officiel",
+                "consulter_correspondances_import",
+                "consulter_lignes_import",
+                "corriger_ligne_import",
+                "ignorer_ligne_import",
+                "consulter_erreurs_import",
+            },
+        ),
+        # Toute action portant sur un import existant ouvre sa liste et sa fiche.
+        (
+            {
+                "modifier_import_officiel",
+                "supprimer_import_officiel",
+                "consulter_progression_import",
+                "relancer_lecture_import",
+                "valider_correspondance_import",
+                "valider_lignes_import",
+                "confirmer_import_officiel",
+                "annuler_import_officiel",
+                "consulter_correspondances_import",
+                "consulter_lignes_import",
+                "corriger_ligne_import",
+                "ignorer_ligne_import",
+                "consulter_erreurs_import",
+            },
+            {"lister_imports_officiels", "consulter_import_officiel"},
+        ),
+        # Correspondance : l'opérateur doit voir les colonnes et les champs attendus.
+        (
+            {"valider_correspondance_import"},
+            {"consulter_correspondances_import", "consulter_champs_attendus_import"},
+        ),
+        # Validation/correction : l'opérateur doit voir les lignes et leurs erreurs.
+        (
+            {
+                "valider_lignes_import",
+                "corriger_ligne_import",
+                "ignorer_ligne_import",
+                "confirmer_import_officiel",
+            },
+            {"consulter_lignes_import", "consulter_erreurs_import"},
+        ),
+        # Relance et confirmation nécessitent le suivi de progression.
+        (
+            {"relancer_lecture_import", "confirmer_import_officiel"},
+            {"consulter_progression_import"},
+        ),
         # Gestion des sessions : les actions ouvrent l'interface principale.
         (
             {

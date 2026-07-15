@@ -276,6 +276,7 @@ def supprimer_import_logiquement_task(self, import_id):
                 "operation": operation,
                 "message": "Import officiel introuvable ou déjà supprimé.",
             }
+        ImportOfficielService.verifier_suppression(import_officiel)
 
         ProgressionImportService.definir(
             import_id,

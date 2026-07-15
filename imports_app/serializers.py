@@ -189,6 +189,7 @@ class ImportOfficielCreateSerializer(serializers.ModelSerializer):
     )
     fichier = serializers.FileField(write_only=True)
     commentaire = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+    continuer_malgre_doublon = serializers.BooleanField(required=False, default=False, write_only=True)
 
     class Meta:
         model = ImportOfficiel
@@ -197,6 +198,7 @@ class ImportOfficielCreateSerializer(serializers.ModelSerializer):
             "type_source",
             "fichier",
             "commentaire",
+            "continuer_malgre_doublon",
         ]
 
     def validate_fichier(self, fichier):
@@ -212,14 +214,20 @@ class ImportOfficielCreateSerializer(serializers.ModelSerializer):
         if acteur is not None and not getattr(acteur, "is_authenticated", False):
             acteur = None
 
-        return ImportOfficielService.creer_import_officiel(
-            session=validated_data["session"],
-            type_source=validated_data["type_source"],
-            fichier=validated_data["fichier"],
-            commentaire=validated_data.get("commentaire", ""),
-            importe_par=acteur,
-            lancer_async=True,
-        )
+        try:
+            return ImportOfficielService.creer_import_officiel(
+                session=validated_data["session"],
+                type_source=validated_data["type_source"],
+                fichier=validated_data["fichier"],
+                commentaire=validated_data.get("commentaire", ""),
+                importe_par=acteur,
+                lancer_async=True,
+                continuer_malgre_doublon=validated_data.get("continuer_malgre_doublon", False),
+            )
+        except Exception as erreur:
+            if hasattr(erreur, "message_dict"):
+                raise serializers.ValidationError(erreur.message_dict) from erreur
+            raise
 
     def to_representation(self, instance):
         return ImportOfficielDetailSerializer(instance, context=self.context).data

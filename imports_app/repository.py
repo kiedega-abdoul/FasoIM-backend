@@ -220,7 +220,8 @@ class ImportOfficielRepository(BaseImportRepository):
         import_id = ImportOfficielRepository.identifiant(import_officiel)
         lignes = LigneImportRepository.lister_par_import(import_id)
         compteur_lignes = dict(
-            lignes.values("statut")
+            lignes.order_by()
+            .values("statut")
             .annotate(total=Count("id"))
             .values_list("statut", "total")
         )

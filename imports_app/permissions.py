@@ -173,6 +173,8 @@ class PermissionLigneImport(PermissionImportsBase):
         "destroy": "ignorer_ligne_import",
         "corriger": "corriger_ligne_import",
         "ignorer": "ignorer_ligne_import",
+        "ignorer_plusieurs": "ignorer_ligne_import",
+        "reintegrer_plusieurs": "ignorer_ligne_import",
         "revalider": "corriger_ligne_import",
     }
 
