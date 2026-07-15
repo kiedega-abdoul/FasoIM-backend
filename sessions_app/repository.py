@@ -64,7 +64,7 @@ class SessionImmersionRepository:
                 SessionImmersion.TypeSession.VOLONTAIRE,
                 SessionImmersion.TypeSession.MIXTE,
             ],
-        )
+        ).order_by("date_ouverture_inscription", "id")[:1]
 
 
 class ParametreSessionRepository:

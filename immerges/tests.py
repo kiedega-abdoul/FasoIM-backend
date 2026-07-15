@@ -7,6 +7,7 @@ from django.db import models
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.test import APITestCase
 
 from imports_app.models import ImportOfficiel, LigneImport
 from immerges.models import (
@@ -17,7 +18,7 @@ from immerges.models import (
     InscriptionVolontaire,
 )
 from immerges.service import ImportVersImmergeService
-from sessions_app.models import SessionImmersion
+from sessions_app.models import ParametreSession, SessionImmersion
 
 
 class ImmergesImportBridgeTests(TestCase):
@@ -241,3 +242,149 @@ class ImmergesImportBridgeTests(TestCase):
         self.assertEqual(reverse("immerges:immerge-list"), "/api/immerges/immerges/")
         self.assertEqual(reverse("immerges:immerge-examen-list"), "/api/immerges/examens/")
         self.assertEqual(reverse("immerges:inscription-volontaire-list"), "/api/immerges/volontaires/")
+
+
+class InscriptionVolontairePubliqueAPITests(APITestCase):
+    def creer_session_ouverte(self):
+        aujourd_hui = timezone.localdate()
+        session = SessionImmersion.objects.create(
+            nom="Session volontaire publique",
+            annee=aujourd_hui.year,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            date_debut=aujourd_hui + timedelta(days=10),
+            date_fin=aujourd_hui + timedelta(days=30),
+            date_ouverture_inscription=aujourd_hui - timedelta(days=1),
+            date_fermeture_inscription=aujourd_hui + timedelta(days=5),
+            statut=SessionImmersion.Statut.OUVERTE,
+        )
+        ParametreSession.objects.create(
+            session=session,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+        )
+        return session
+
+    def payload(self, session):
+        return {
+            "session_id": session.id,
+            "nom": "Kiedega",
+            "prenoms": "Abdoul Samando",
+            "sexe": "M",
+            "date_naissance": "2003-05-21",
+            "lieu_naissance": "Sargo",
+            "nationalite": "Burkinabè",
+            "numero_cnib": "B1780023000",
+            "telephone": "+22677420537",
+            "email": "volontaire@example.com",
+            "contact_urgence": "+22670000001",
+            "nom_contact_urgence": "KIEDEGA Issa",
+            "region_residence": "Centre",
+            "province_residence": "Kadiogo",
+            "commune_residence": "",
+            "adresse_residence": "Secteur 22, Ouagadougou",
+            "niveau_etude": "",
+            "profession": "Étudiant",
+            "motivation": "Servir la patrie.",
+        }
+
+    def test_soumission_publique_cree_demande_et_code_suivi(self):
+        session = self.creer_session_ouverte()
+        response = self.client.post(
+            "/api/immerges/public/volontaires/demandes/",
+            self.payload(session),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data["code_suivi"].startswith(f"VOL{session.annee}"))
+        inscription = InscriptionVolontaire.objects.get(code_suivi=response.data["code_suivi"])
+        self.assertEqual(inscription.statut_demande, InscriptionVolontaire.StatutDemande.EN_ATTENTE)
+        self.assertEqual(inscription.nom, "KIEDEGA")
+
+    def test_soumission_refusee_si_session_fermee(self):
+        session = self.creer_session_ouverte()
+        session.statut = SessionImmersion.Statut.BROUILLON
+        session.save(update_fields=["statut", "updated_at"])
+
+        response = self.client.post(
+            "/api/immerges/public/volontaires/demandes/",
+            self.payload(session),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_doublon_meme_session_refuse(self):
+        session = self.creer_session_ouverte()
+        payload = self.payload(session)
+        premiere = self.client.post("/api/immerges/public/volontaires/demandes/", payload, format="json")
+        seconde = self.client.post("/api/immerges/public/volontaires/demandes/", payload, format="json")
+
+        self.assertEqual(premiere.status_code, 201, premiere.data)
+        self.assertEqual(seconde.status_code, 400, seconde.data)
+        self.assertEqual(InscriptionVolontaire.objects.filter(session=session).count(), 1)
+
+
+class SuiviVolontairePublicAPITests(APITestCase):
+    def setUp(self):
+        aujourd_hui = timezone.localdate()
+        self.session = SessionImmersion.objects.create(
+            nom="Session volontaire suivi",
+            annee=aujourd_hui.year,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            date_debut=aujourd_hui + timedelta(days=10),
+            date_fin=aujourd_hui + timedelta(days=30),
+            date_ouverture_inscription=aujourd_hui - timedelta(days=1),
+            date_fermeture_inscription=aujourd_hui + timedelta(days=5),
+            statut=SessionImmersion.Statut.OUVERTE,
+        )
+        ParametreSession.objects.create(
+            session=self.session,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+        )
+        self.inscription = InscriptionVolontaire.objects.create(
+            session=self.session,
+            code_suivi="VOL2026SUIVI01",
+            nom="KIEDEGA",
+            prenoms="Abdoul Samando",
+            nom_et_prenoms="KIEDEGA Abdoul Samando",
+            telephone="+22670000000",
+            statut_demande=InscriptionVolontaire.StatutDemande.EN_ATTENTE,
+        )
+
+    def test_suivi_retourne_demande_en_attente(self):
+        response = self.client.post(
+            "/api/immerges/public/volontaires/suivi/",
+            {"code_suivi": "vol2026suivi01"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["statut"], "EN_ATTENTE")
+        self.assertEqual(response.data["code_fasoim"], "")
+
+    def test_suivi_acceptee_retourne_code_fasoim(self):
+        self.inscription.statut_demande = InscriptionVolontaire.StatutDemande.ACCEPTEE
+        self.inscription.save(update_fields=["statut_demande", "updated_at"])
+        Immerge.objects.create(
+            session=self.session,
+            type_immerge=Immerge.TypeImmerge.VOLONTAIRE,
+            origine_id=self.inscription.id,
+            code_fasoim="IP2026VOL0100001",
+            statut=Immerge.Statut.CODE_GENERE,
+        )
+        response = self.client.post(
+            "/api/immerges/public/volontaires/suivi/",
+            {"code_suivi": self.inscription.code_suivi},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["statut"], "ACCEPTEE")
+        self.assertEqual(response.data["code_fasoim"], "IP2026VOL0100001")
+
+    def test_suivi_refuse_code_inconnu(self):
+        response = self.client.post(
+            "/api/immerges/public/volontaires/suivi/",
+            {"code_suivi": "INCONNU"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)

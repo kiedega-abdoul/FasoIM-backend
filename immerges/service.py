@@ -247,6 +247,68 @@ class InscriptionVolontaireService:
             sequence += 1
 
     @staticmethod
+    def verifier_session_ouverte_aux_volontaires(session):
+        """Refuse toute demande hors de la période publique d'inscription."""
+        from sessions_app.models import ParametreSession, SessionImmersion
+
+        aujourd_hui = timezone.localdate()
+        erreurs = {}
+        if not session or session.deleted_at is not None:
+            erreurs["session_id"] = "La session demandée est introuvable."
+        elif session.statut != SessionImmersion.Statut.OUVERTE:
+            erreurs["session_id"] = "Cette session n'est pas ouverte aux inscriptions."
+        elif session.type_session not in {
+            SessionImmersion.TypeSession.VOLONTAIRE,
+            SessionImmersion.TypeSession.MIXTE,
+        }:
+            erreurs["session_id"] = "Cette session n'accepte pas les demandes volontaires."
+        elif not hasattr(session, "parametres") or session.parametres.deleted_at is not None:
+            erreurs["session_id"] = "Les paramètres de cette session ne sont pas disponibles."
+        elif session.parametres.mode_entree not in {
+            ParametreSession.ModeEntree.INSCRIPTION,
+            ParametreSession.ModeEntree.MIXTE,
+        }:
+            erreurs["session_id"] = "Cette session n'accepte pas les inscriptions volontaires."
+        elif not session.date_ouverture_inscription or not session.date_fermeture_inscription:
+            erreurs["session_id"] = "La période d'inscription de cette session n'est pas configurée."
+        elif not (session.date_ouverture_inscription <= aujourd_hui <= session.date_fermeture_inscription):
+            erreurs["session_id"] = "La période d'inscription de cette session est fermée."
+
+        if erreurs:
+            raise ValidationMetierErreur(erreurs)
+
+    @staticmethod
+    def verifier_absence_doublon(session, donnees):
+        """Empêche plusieurs demandes actives pour la même personne et la même session."""
+        from django.db.models import Q
+
+        criteres = Q()
+        numero_cnib = (donnees.get("numero_cnib") or "").strip()
+        telephone = (donnees.get("telephone") or "").strip()
+        email = (donnees.get("email") or "").strip().lower()
+        if numero_cnib:
+            criteres |= Q(numero_cnib__iexact=numero_cnib)
+        if telephone:
+            criteres |= Q(telephone=telephone)
+        if email:
+            criteres |= Q(email__iexact=email)
+
+        if criteres and InscriptionVolontaireRepository.actifs().filter(session=session).filter(criteres).exists():
+            raise ValidationMetierErreur({
+                "detail": "Une demande existe déjà pour cette personne dans cette session."
+            })
+
+    @staticmethod
+    @transaction.atomic
+    def creer_publiquement(**donnees):
+        """Crée une demande depuis le formulaire public après tous les contrôles."""
+        donnees = NettoyageImmergeService.nettoyer_identite(donnees)
+        session = donnees.get("session")
+        InscriptionVolontaireService.verifier_session_ouverte_aux_volontaires(session)
+        InscriptionVolontaireService.verifier_absence_doublon(session, donnees)
+        return InscriptionVolontaireService.creer(**donnees)
+
+    @staticmethod
     def creer(**donnees):
         """Crée une demande volontaire et génère son code de suivi si absent."""
         donnees = NettoyageImmergeService.nettoyer_identite(donnees)
@@ -268,37 +330,153 @@ class InscriptionVolontaireService:
         inscription.save()
         return inscription
 
+    CHAMPS_OBLIGATOIRES_ACCEPTATION = {
+        "nom": "Le nom est obligatoire.",
+        "prenoms": "Le ou les prénoms sont obligatoires.",
+        "sexe": "Le sexe est obligatoire.",
+        "date_naissance": "La date de naissance est obligatoire.",
+        "lieu_naissance": "Le lieu de naissance est obligatoire.",
+        "nationalite": "La nationalité est obligatoire.",
+        "numero_cnib": "Le numéro CNIB est obligatoire.",
+        "telephone": "Le téléphone est obligatoire.",
+        "email": "L’adresse e-mail est obligatoire.",
+        "contact_urgence": "Le téléphone d’urgence est obligatoire.",
+        "nom_contact_urgence": "Le nom du contact d’urgence est obligatoire.",
+        "region_residence": "La région de résidence est obligatoire.",
+        "province_residence": "La province de résidence est obligatoire.",
+        "adresse_residence": "L’adresse de résidence est obligatoire.",
+        "profession": "La profession est obligatoire.",
+        "motivation": "La motivation est obligatoire.",
+    }
+
+    @staticmethod
+    def verifier_acceptabilite(inscription):
+        """Retourne les blocages empêchant la création sûre d'un immergé."""
+        blocages = []
+
+        if inscription is None:
+            return {"acceptable": False, "blocages": ["Demande volontaire introuvable."]}
+        if inscription.deleted_at is not None:
+            blocages.append("Cette demande a été supprimée.")
+        if inscription.statut_demande != InscriptionVolontaire.StatutDemande.EN_ATTENTE:
+            blocages.append(
+                f"La demande est déjà {inscription.get_statut_demande_display().lower()}."
+            )
+        if not inscription.session_id or getattr(inscription.session, "deleted_at", None) is not None:
+            blocages.append("La session liée à la demande est introuvable.")
+
+        for champ, message in InscriptionVolontaireService.CHAMPS_OBLIGATOIRES_ACCEPTATION.items():
+            valeur = getattr(inscription, champ, None)
+            if valeur is None or (isinstance(valeur, str) and not valeur.strip()):
+                blocages.append(message)
+
+        if inscription.session_id:
+            doublon = ImmergeRepository.actifs().filter(
+                session_id=inscription.session_id,
+                type_immerge=Immerge.TypeImmerge.VOLONTAIRE,
+                origine_id=inscription.id,
+            ).exists()
+            if doublon:
+                blocages.append("Cette demande possède déjà un immergé central.")
+
+        return {"acceptable": not blocages, "blocages": blocages}
+
+    @staticmethod
+    def verifier_demande_en_attente(inscription, *, action):
+        """Autorise une décision uniquement sur une demande active en attente."""
+        if inscription.deleted_at is not None:
+            raise ValidationMetierErreur({"detail": "Cette demande a été supprimée."})
+
+        if inscription.statut_demande != InscriptionVolontaire.StatutDemande.EN_ATTENTE:
+            libelle = inscription.get_statut_demande_display().lower()
+            raise ValidationMetierErreur({
+                "detail": (
+                    f"Impossible de {action} cette demande : "
+                    f"elle est déjà {libelle}."
+                )
+            })
+
     @staticmethod
     @transaction.atomic
     def accepter(inscription, *, acteur=None, motif_decision="", creer_immerge=True):
-        """Accepte une demande volontaire et crée l’Immerge central si demandé."""
+        """Accepte uniquement une demande active encore en attente."""
+        inscription = InscriptionVolontaireRepository.get_by_id_pour_update(inscription.id)
+        if not inscription:
+            raise ValidationMetierErreur({"detail": "Demande volontaire introuvable."})
+
+        InscriptionVolontaireService.verifier_demande_en_attente(
+            inscription,
+            action="accepter",
+        )
+
+        InscriptionVolontaireService.verifier_demande_en_attente(
+            inscription,
+            action="accepter",
+        )
+
+        verification = InscriptionVolontaireService.verifier_acceptabilite(inscription)
+        if not verification["acceptable"]:
+            raise ValidationMetierErreur({
+                "blocages_acceptation": verification["blocages"]
+            })
+
         inscription.statut_demande = InscriptionVolontaire.StatutDemande.ACCEPTEE
         inscription.date_decision = timezone.now()
         inscription.motif_decision = motif_decision or inscription.motif_decision
-        inscription.traite_par = acteur
         inscription.full_clean()
-        inscription.save(update_fields=["statut_demande", "date_decision", "motif_decision", "traite_par", "updated_at"])
+        inscription.save(update_fields=["statut_demande", "date_decision", "motif_decision", "updated_at"])
         if creer_immerge:
             ImmergeService.creer_depuis_volontaire(inscription)
         return inscription
 
     @staticmethod
+    @transaction.atomic
     def rejeter(inscription, *, acteur=None, motif_decision=""):
-        """Rejette une demande volontaire avec un motif de décision."""
+        """Rejette uniquement une demande active encore en attente."""
+        inscription = InscriptionVolontaireRepository.get_by_id_pour_update(inscription.id)
+        if not inscription:
+            raise ValidationMetierErreur({"detail": "Demande volontaire introuvable."})
+
+        InscriptionVolontaireService.verifier_demande_en_attente(
+            inscription,
+            action="rejeter",
+        )
+
+        motif_decision = (motif_decision or "").strip()
+        if not motif_decision:
+            raise ValidationMetierErreur({
+                "motif_decision": "Le motif du rejet est obligatoire."
+            })
+
         inscription.statut_demande = InscriptionVolontaire.StatutDemande.REJETEE
         inscription.date_decision = timezone.now()
         inscription.motif_decision = motif_decision
-        inscription.traite_par = acteur
         inscription.full_clean()
-        inscription.save(update_fields=["statut_demande", "date_decision", "motif_decision", "traite_par", "updated_at"])
+        inscription.save(update_fields=["statut_demande", "date_decision", "motif_decision", "updated_at"])
         return inscription
 
     @staticmethod
+    @transaction.atomic
     def annuler(inscription, *, motif_decision=""):
-        """Annule une demande volontaire sans créer d’Immerge central."""
+        """Annule uniquement une demande active encore en attente."""
+        inscription = InscriptionVolontaireRepository.get_by_id_pour_update(inscription.id)
+        if not inscription:
+            raise ValidationMetierErreur({"detail": "Demande volontaire introuvable."})
+
+        InscriptionVolontaireService.verifier_demande_en_attente(
+            inscription,
+            action="annuler",
+        )
+
+        motif_decision = (motif_decision or "").strip()
+        if not motif_decision:
+            raise ValidationMetierErreur({
+                "motif_decision": "Le motif de l'annulation est obligatoire."
+            })
+
         inscription.statut_demande = InscriptionVolontaire.StatutDemande.ANNULEE
         inscription.date_decision = timezone.now()
-        inscription.motif_decision = motif_decision or inscription.motif_decision
+        inscription.motif_decision = motif_decision
         inscription.full_clean()
         inscription.save(update_fields=["statut_demande", "date_decision", "motif_decision", "updated_at"])
         return inscription

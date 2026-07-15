@@ -94,9 +94,9 @@ class PermissionInscriptionVolontaire(PermissionImmergeBase):
         "destroy": "supprimer_inscription_volontaire",
         "accepter": "accepter_inscription_volontaire",
         "rejeter": "refuser_inscription_volontaire",
-        "annuler": "annuler_inscription_volontaire",
         "accepter_lot_async": "accepter_inscriptions_volontaires_lot",
-        "centraliser_acceptes_async": "centraliser_volontaires_acceptes",
+        "accepter_lot_async": "accepter_inscriptions_volontaires_lot",
+        "progression_acceptation_lot": "accepter_inscriptions_volontaires_lot",
     }
 
 

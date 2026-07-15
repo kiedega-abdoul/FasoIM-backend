@@ -392,7 +392,7 @@ class SessionImmersionAPITests(APITestCase):
         )
         SessionImmersionService.ouvrir_session(session)
         self.client.force_authenticate(user=None)
-        reponse = self.client.get("/api/public/sessions/ouvertes-inscription/")
+        reponse = self.client.get("/api/sessions/public/ouvertes-inscription/")
         self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
         self.assertEqual(len(reponse.data), 1)
         donnees = reponse.data[0]
@@ -400,3 +400,59 @@ class SessionImmersionAPITests(APITestCase):
         self.assertNotIn("parametres", donnees)
         self.assertNotIn("statut", donnees)
         self.assertNotIn("taux_presence_minimum_attestation", donnees)
+
+    def test_une_seule_session_active_par_type(self):
+        premiere = self.creer_session(
+            nom="Session volontaire active 1",
+            annee=2026,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+        )
+        seconde = self.creer_session(
+            nom="Session volontaire active 2",
+            annee=2027,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+            date_debut=date(2027, 8, 1),
+            date_fin=date(2027, 8, 30),
+            date_ouverture_inscription=date(2027, 7, 1),
+            date_fermeture_inscription=date(2027, 7, 31),
+        )
+
+        SessionImmersionService.ouvrir_session(premiere)
+        with self.assertRaisesMessage(Exception, "Une autre session active existe déjà"):
+            SessionImmersionService.mettre_en_preparation(seconde)
+
+        seconde.refresh_from_db()
+        self.assertEqual(seconde.statut, SessionImmersion.Statut.BROUILLON)
+
+    def test_une_seule_session_publique_pour_les_volontaires(self):
+        aujourd_hui = timezone.localdate()
+        session_volontaire = self.creer_session(
+            nom="Session volontaire publique unique",
+            annee=aujourd_hui.year,
+            type_session=SessionImmersion.TypeSession.VOLONTAIRE,
+            public_cible=SessionImmersion.PublicCible.VOLONTAIRE,
+            mode_entree=ParametreSession.ModeEntree.INSCRIPTION,
+            date_debut=aujourd_hui + timedelta(days=10),
+            date_fin=aujourd_hui + timedelta(days=40),
+            date_ouverture_inscription=aujourd_hui - timedelta(days=1),
+            date_fermeture_inscription=aujourd_hui + timedelta(days=5),
+        )
+        session_mixte = self.creer_session(
+            nom="Session mixte concurrente",
+            annee=aujourd_hui.year + 1,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            mode_entree=ParametreSession.ModeEntree.MIXTE,
+            date_debut=aujourd_hui + timedelta(days=50),
+            date_fin=aujourd_hui + timedelta(days=80),
+            date_ouverture_inscription=aujourd_hui - timedelta(days=1),
+            date_fermeture_inscription=aujourd_hui + timedelta(days=5),
+        )
+
+        SessionImmersionService.ouvrir_session(session_volontaire)
+        with self.assertRaisesMessage(Exception, "demandes volontaires"):
+            SessionImmersionService.ouvrir_session(session_mixte)

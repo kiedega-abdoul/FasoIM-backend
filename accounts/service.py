@@ -1030,6 +1030,31 @@ class ControleAccesService(ServiceBase):
             },
             {"consulter_demande_permission"},
         ),
+        # Inscriptions volontaires : toute action interne ouvre la liste.
+        (
+            {
+                "lister_inscriptions_volontaires",
+                "consulter_inscription_volontaire",
+                "accepter_inscription_volontaire",
+                "refuser_inscription_volontaire",
+                "accepter_inscriptions_volontaires_lot",
+            },
+            {"lister_inscriptions_volontaires"},
+        ),
+        # Une décision individuelle nécessite le détail de la demande.
+        (
+            {
+                "accepter_inscription_volontaire",
+                "refuser_inscription_volontaire",
+                "accepter_inscriptions_volontaires_lot",
+            },
+            {"consulter_inscription_volontaire"},
+        ),
+        # L'acceptation en lot réutilise le droit d'acceptation individuelle.
+        (
+            {"accepter_inscriptions_volontaires_lot"},
+            {"accepter_inscription_volontaire"},
+        ),
     )
 
     @classmethod

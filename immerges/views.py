@@ -1,6 +1,9 @@
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import (
     Immerge,
@@ -20,6 +23,8 @@ from .serializers import (
     ImmergeSelectionneSerializer,
     ImmergeSerializer,
     InscriptionVolontaireSerializer,
+    InscriptionVolontairePubliqueSerializer,
+    SuiviVolontairePublicSerializer,
 )
 from .service import ImmergeService, InscriptionVolontaireService
 from .tasks import (
@@ -27,13 +32,94 @@ from .tasks import (
     accepter_volontaires_en_lot_task,
     centraliser_source_immerge_task,
     centraliser_sources_importees_task,
-    centraliser_volontaires_acceptes_task,
     changer_statut_immerges_en_lot_task,
     confirmer_import_vers_immerges_task,
     generer_codes_fasoim_manquants_task,
     regenerer_qr_codes_task,
     supprimer_immerges_session_task,
 )
+
+
+class InscriptionVolontairePubliqueAPIView(APIView):
+    """Permet à une personne non connectée de déposer une demande volontaire."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = InscriptionVolontairePubliqueSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        inscription = serializer.save()
+        return Response(
+            {
+                "message": "Votre demande a été enregistrée.",
+                "code_suivi": inscription.code_suivi,
+                "statut": inscription.statut_demande,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SuiviVolontairePublicAPIView(APIView):
+    """Consulte une demande volontaire uniquement à partir de son code de suivi."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        code_suivi = str(request.data.get("code_suivi") or "").strip().upper()
+        if not code_suivi:
+            return Response(
+                {"code_suivi": ["Le code de suivi est obligatoire."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        inscription = (
+            InscriptionVolontaire.objects.filter(
+                code_suivi__iexact=code_suivi,
+                deleted_at__isnull=True,
+            )
+            .select_related("session")
+            .first()
+        )
+        if inscription is None:
+            return Response(
+                {"detail": "Aucune demande ne correspond à ce code de suivi."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        immerge = None
+        if inscription.statut_demande == InscriptionVolontaire.StatutDemande.ACCEPTEE:
+            immerge = (
+                Immerge.objects.filter(
+                    type_immerge=Immerge.TypeImmerge.VOLONTAIRE,
+                    origine_id=inscription.id,
+                    session=inscription.session,
+                    deleted_at__isnull=True,
+                )
+                .only("code_fasoim")
+                .first()
+            )
+
+        messages = {
+            InscriptionVolontaire.StatutDemande.EN_ATTENTE: "Votre demande est en attente d'étude.",
+            InscriptionVolontaire.StatutDemande.ACCEPTEE: "Votre demande a été acceptée.",
+            InscriptionVolontaire.StatutDemande.REJETEE: "Votre demande a été rejetée.",
+            InscriptionVolontaire.StatutDemande.ANNULEE: "Votre demande a été annulée.",
+        }
+        donnees = {
+            "code_suivi": inscription.code_suivi,
+            "nom_complet": inscription.identite_affichable,
+            "session": inscription.session.nom,
+            "statut": inscription.statut_demande,
+            "statut_libelle": inscription.get_statut_demande_display(),
+            "date_soumission": inscription.date_soumission,
+            "date_decision": inscription.date_decision,
+            "motif_decision": inscription.motif_decision,
+            "code_fasoim": immerge.code_fasoim if immerge else "",
+            "message": messages.get(inscription.statut_demande, "Statut de la demande disponible."),
+        }
+        return Response(SuiviVolontairePublicSerializer(donnees).data)
 
 
 class SourceImmergeMixin:
@@ -72,7 +158,14 @@ class SourceImmergeMixin:
             import_officiel_id=request.data.get("import_officiel_id") or request.data.get("import_officiel"),
             session_id=request.data.get("session_id") or request.data.get("session"),
         )
-        return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "task_id": task.id,
+                "progression_identifiant": f"acceptation_volontaires:{task.id}",
+                "total": len(request.data.get("inscription_ids", [])),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class ImmergeExamenViewSet(SourceImmergeMixin, viewsets.ModelViewSet):
@@ -154,11 +247,12 @@ class InscriptionVolontaireViewSet(viewsets.ModelViewSet):
     permission_classes = [PermissionInscriptionVolontaire]
 
     def get_queryset(self):
-        queryset = InscriptionVolontaire.objects.filter(deleted_at__isnull=True).select_related("session", "traite_par")
+        queryset = InscriptionVolontaire.objects.filter(deleted_at__isnull=True).select_related("session")
 
         session = self.request.query_params.get("session")
         statut = self.request.query_params.get("statut_demande") or self.request.query_params.get("statut")
         code_suivi = self.request.query_params.get("code_suivi")
+        recherche = (self.request.query_params.get("recherche") or self.request.query_params.get("search") or "").strip()
 
         if session:
             queryset = queryset.filter(session_id=session)
@@ -166,6 +260,16 @@ class InscriptionVolontaireViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(statut_demande=statut)
         if code_suivi:
             queryset = queryset.filter(code_suivi__iexact=code_suivi)
+        if recherche:
+            queryset = queryset.filter(
+                Q(code_suivi__icontains=recherche)
+                | Q(nom__icontains=recherche)
+                | Q(prenoms__icontains=recherche)
+                | Q(nom_et_prenoms__icontains=recherche)
+                | Q(telephone__icontains=recherche)
+                | Q(email__icontains=recherche)
+                | Q(numero_cnib__icontains=recherche)
+            )
 
         return queryset.order_by("-id")
 
@@ -190,15 +294,6 @@ class InscriptionVolontaireViewSet(viewsets.ModelViewSet):
         )
         return Response(self.get_serializer(inscription).data)
 
-    @action(detail=True, methods=["post"], url_path="annuler")
-    def annuler(self, request, pk=None):
-        inscription = self.get_object()
-        inscription = InscriptionVolontaireService.annuler(
-            inscription,
-            motif_decision=request.data.get("motif_decision", ""),
-        )
-        return Response(self.get_serializer(inscription).data)
-
     @action(detail=False, methods=["post"], url_path="accepter-lot-async")
     def accepter_lot_async(self, request):
         task = accepter_volontaires_en_lot_task.delay(
@@ -209,13 +304,17 @@ class InscriptionVolontaireViewSet(viewsets.ModelViewSet):
         )
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
-    @action(detail=False, methods=["post"], url_path="centraliser-acceptes-async")
-    def centraliser_acceptes_async(self, request):
-        task = centraliser_volontaires_acceptes_task.delay(
-            session_id=request.data.get("session_id") or request.data.get("session"),
-        )
-        return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
+
+    @action(detail=False, methods=["get"], url_path="progression-acceptation-lot")
+    def progression_acceptation_lot(self, request):
+        identifiant = request.query_params.get("identifiant")
+        if not identifiant:
+            return Response(
+                {"detail": "identifiant est obligatoire."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(ProgressionImmergeService.lire(identifiant))
 
 class ImmergeViewSet(viewsets.ModelViewSet):
     serializer_class = ImmergeSerializer

@@ -422,7 +422,7 @@ def accepter_volontaires_en_lot_task(self, inscription_ids, acteur_id=None, moti
     """Accepte plusieurs inscriptions volontaires et crée les Immerge si demandé."""
 
     operation = "acceptation_volontaires_lot"
-    identifiant = f"acceptation_volontaires:{len(inscription_ids or [])}"
+    identifiant = f"acceptation_volontaires:{self.request.id}"
 
     with ProgressionImmergeService.verrou(identifiant, operation) as verrou_acquis:
         if not verrou_acquis:
@@ -448,7 +448,7 @@ def accepter_volontaires_en_lot_task(self, inscription_ids, acteur_id=None, moti
 
             for index, inscription_id in enumerate(inscription_ids, start=1):
                 try:
-                    inscription = InscriptionVolontaireRepository.get_by_id_pour_update(inscription_id)
+                    inscription = InscriptionVolontaireRepository.get_by_id(inscription_id)
                     InscriptionVolontaireService.accepter(
                         inscription,
                         acteur=acteur,
@@ -456,8 +456,12 @@ def accepter_volontaires_en_lot_task(self, inscription_ids, acteur_id=None, moti
                         creer_immerge=creer_immerge,
                     )
                     traitees += 1
-                except Exception:
-                    erreurs += 1
+                except Exception as erreur:
+                        erreurs += 1
+                        print(
+                            f"[Acceptation volontaires lot] "
+                            f"inscription_id={inscription_id} erreur={_message_exception(erreur)}"
+                        )
 
                 if index % 25 == 0 or index == total:
                     ProgressionImmergeService.definir(

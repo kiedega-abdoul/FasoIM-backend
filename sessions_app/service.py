@@ -112,6 +112,56 @@ class SessionImmersionService:
         return session
 
     @classmethod
+    def verifier_unicite_session_active(cls, session, nouveau_statut):
+        statuts_actifs = {
+            SessionImmersion.Statut.OUVERTE,
+            SessionImmersion.Statut.EN_PREPARATION,
+            SessionImmersion.Statut.EN_COURS,
+        }
+        if nouveau_statut not in statuts_actifs:
+            return
+
+        concurrentes = SessionImmersion.objects.filter(
+            deleted_at__isnull=True,
+            type_session=session.type_session,
+            statut__in=statuts_actifs,
+        ).exclude(pk=session.pk)
+        if concurrentes.exists():
+            raise ValidationError({
+                "statut": (
+                    "Une autre session active existe déjà pour ce type de session. "
+                    "Terminez, archivez ou annulez-la avant d'activer celle-ci."
+                )
+            })
+
+        # Une session VOLONTAIRE ou MIXTE ouverte aux inscriptions partage le
+        # même formulaire public. Il ne peut donc y en avoir qu'une à la fois.
+        if nouveau_statut == SessionImmersion.Statut.OUVERTE and session.type_session in {
+            SessionImmersion.TypeSession.VOLONTAIRE,
+            SessionImmersion.TypeSession.MIXTE,
+        }:
+            autre_session_volontaire = SessionImmersion.objects.filter(
+                deleted_at__isnull=True,
+                statut=SessionImmersion.Statut.OUVERTE,
+                type_session__in=[
+                    SessionImmersion.TypeSession.VOLONTAIRE,
+                    SessionImmersion.TypeSession.MIXTE,
+                ],
+                parametres__mode_entree__in=[
+                    ParametreSession.ModeEntree.INSCRIPTION,
+                    ParametreSession.ModeEntree.MIXTE,
+                ],
+                parametres__deleted_at__isnull=True,
+            ).exclude(pk=session.pk)
+            if autre_session_volontaire.exists():
+                raise ValidationError({
+                    "statut": (
+                        "Une session acceptant déjà les demandes volontaires est ouverte. "
+                        "Fermez-la avant d'en ouvrir une autre."
+                    )
+                })
+
+    @classmethod
     def changer_statut(cls, session, nouveau_statut):
         cls.verifier_session_non_supprimee(session)
         if nouveau_statut == session.statut:
@@ -132,6 +182,8 @@ class SessionImmersionService:
             raise ValidationError({
                 "parametres": "Configurez les paramètres de la session avant de changer son statut."
             })
+
+        cls.verifier_unicite_session_active(session, nouveau_statut)
 
         if nouveau_statut == SessionImmersion.Statut.TERMINEE:
             etat = VerificationClotureSessionService.verifier(session)

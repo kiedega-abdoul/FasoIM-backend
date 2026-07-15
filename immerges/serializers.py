@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from sessions_app.models import SessionImmersion
+
 from .models import (
     Immerge,
     ImmergeConcours,
@@ -130,12 +132,24 @@ class ImmergeSelectionneSerializer(SourceIdentiteSerializerMixin, serializers.Mo
 
 class InscriptionVolontaireSerializer(serializers.ModelSerializer):
     identite_affichable = serializers.CharField(read_only=True)
+    acceptable = serializers.SerializerMethodField()
+    blocages_acceptation = serializers.SerializerMethodField()
+    session_nom = serializers.CharField(source="session.nom", read_only=True)
+    session_code = serializers.CharField(source="session.code", read_only=True)
+    session_annee = serializers.IntegerField(source="session.annee", read_only=True)
+    statut_libelle = serializers.CharField(source="get_statut_demande_display", read_only=True)
 
     class Meta:
         model = InscriptionVolontaire
         fields = [
             "id",
             "session",
+            "session_nom",
+            "session_code",
+            "session_annee",
+            "statut_libelle",
+            "acceptable",
+            "blocages_acceptation",
             "code_suivi",
             "nom",
             "prenoms",
@@ -171,13 +185,106 @@ class InscriptionVolontaireSerializer(serializers.ModelSerializer):
             "date_decision",
             "motif_decision",
             "identite_affichable",
+            "acceptable",
+            "blocages_acceptation",
         ]
+
+    def get_acceptable(self, obj):
+        return InscriptionVolontaireService.verifier_acceptabilite(obj)["acceptable"]
+
+    def get_blocages_acceptation(self, obj):
+        return InscriptionVolontaireService.verifier_acceptabilite(obj)["blocages"]
 
     def create(self, validated_data):
         return InscriptionVolontaireService.creer(**validated_data)
 
     def update(self, instance, validated_data):
         return InscriptionVolontaireService.modifier(instance, **validated_data)
+
+
+class InscriptionVolontairePubliqueSerializer(serializers.ModelSerializer):
+    """Données strictement nécessaires à une soumission publique."""
+
+    session_id = serializers.PrimaryKeyRelatedField(
+        source="session",
+        queryset=SessionImmersion.objects.filter(deleted_at__isnull=True),
+        write_only=True,
+    )
+
+    class Meta:
+        model = InscriptionVolontaire
+        fields = [
+            "session_id",
+            "nom",
+            "prenoms",
+            "sexe",
+            "date_naissance",
+            "lieu_naissance",
+            "nationalite",
+            "numero_cnib",
+            "telephone",
+            "email",
+            "contact_urgence",
+            "nom_contact_urgence",
+            "region_residence",
+            "province_residence",
+            "commune_residence",
+            "adresse_residence",
+            "niveau_etude",
+            "profession",
+            "motivation",
+        ]
+        extra_kwargs = {
+            "nom": {"required": True, "allow_blank": False},
+            "prenoms": {"required": True, "allow_blank": False},
+            "sexe": {"required": True, "allow_blank": False},
+            "date_naissance": {"required": True, "allow_null": False},
+            "lieu_naissance": {"required": True, "allow_blank": False},
+            "nationalite": {"required": True, "allow_blank": False},
+            "numero_cnib": {"required": True, "allow_blank": False},
+            "telephone": {"required": True, "allow_blank": False},
+            "email": {"required": True, "allow_blank": False},
+            "contact_urgence": {"required": True, "allow_blank": False},
+            "nom_contact_urgence": {"required": True, "allow_blank": False},
+            "region_residence": {"required": True, "allow_blank": False},
+            "province_residence": {"required": True, "allow_blank": False},
+            "commune_residence": {"required": False, "allow_blank": True},
+            "adresse_residence": {"required": True, "allow_blank": False},
+            "niveau_etude": {"required": False, "allow_blank": True},
+            "profession": {"required": True, "allow_blank": False},
+            "motivation": {"required": True, "allow_blank": False},
+        }
+
+    def validate_date_naissance(self, valeur):
+        from django.utils import timezone
+
+        if valeur > timezone.localdate():
+            raise serializers.ValidationError("La date de naissance ne peut pas être dans le futur.")
+        return valeur
+
+    def create(self, validated_data):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        try:
+            return InscriptionVolontaireService.creer_publiquement(**validated_data)
+        except DjangoValidationError as exc:
+            detail = getattr(exc, "message_dict", None) or {"detail": exc.messages}
+            raise serializers.ValidationError(detail) from exc
+
+
+class SuiviVolontairePublicSerializer(serializers.Serializer):
+    """Réponse publique minimale pour le suivi d'une demande volontaire."""
+
+    code_suivi = serializers.CharField()
+    nom_complet = serializers.CharField()
+    session = serializers.CharField()
+    statut = serializers.CharField()
+    statut_libelle = serializers.CharField()
+    date_soumission = serializers.DateTimeField()
+    date_decision = serializers.DateTimeField(allow_null=True)
+    motif_decision = serializers.CharField(allow_blank=True)
+    code_fasoim = serializers.CharField(allow_blank=True)
+    message = serializers.CharField()
 
 
 class InscriptionVolontaireDecisionSerializer(serializers.Serializer):
