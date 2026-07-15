@@ -1274,6 +1274,12 @@ class LitRepository:
         )
 
     @staticmethod
+    def compter_exploitables_par_centre(centre_id):
+        return LitRepository.lister_utilisables().filter(
+            dortoir__centre_id=centre_id,
+        ).count()
+
+    @staticmethod
     def filtrer(
         *,
         centre_id=None,

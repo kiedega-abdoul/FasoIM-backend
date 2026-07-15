@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -7,6 +8,8 @@ from django.urls import resolve, reverse
 from rest_framework.test import APIClient
 
 from immerges.models import Immerge
+from sessions_app.models import SessionImmersion
+from organisation.models import RegleOrganisationCentre
 
 from .models import (
     AffectationCentre,
@@ -55,7 +58,6 @@ class ModelesAffectationsTests(TestCase):
             nom="Centre principal",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=100,
             genre=CentreImmersion.Genre.MIXTE,
             publics_acceptes=["BEPC", "BAC"],
             niveaux_acceptes=["BEPC", "BAC_D"],
@@ -98,18 +100,22 @@ class ModelesAffectationsTests(TestCase):
         self.assertIn("niveaux_acceptes", contexte.exception.message_dict)
 
     def test_suppression_logique_region_brouille_le_code(self):
-        ancien_code = self.region.code
+        region_sans_centre = RegionImmersion.objects.create(
+            code="BOUCLE-MOUHOUN",
+            nom="Boucle du Mouhoun",
+        )
+        ancien_code = region_sans_centre.code
 
-        self.region.supprimer_logiquement()
-        self.region.refresh_from_db()
+        region_sans_centre.supprimer_logiquement()
+        region_sans_centre.refresh_from_db()
 
-        self.assertIsNotNone(self.region.deleted_at)
+        self.assertIsNotNone(region_sans_centre.deleted_at)
         self.assertEqual(
-            self.region.statut,
+            region_sans_centre.statut,
             RegionImmersion.Statut.DESACTIVEE,
         )
-        self.assertNotEqual(self.region.code, ancien_code)
-        self.assertIn("SUPPRIME", self.region.code)
+        self.assertNotEqual(region_sans_centre.code, ancien_code)
+        self.assertIn("SUPPRIME", region_sans_centre.code)
 
     def test_suppression_logique_centre_brouille_le_code(self):
         ancien_code = self.centre.code
@@ -135,17 +141,46 @@ class ModelesAffectationsTests(TestCase):
         self.assertEqual(ligne["niveaux_acceptes"], ["BEPC", "BAC_D"])
 
     def test_capacite_region_est_somme_des_centres_actifs(self):
-        CentreImmersion.objects.create(
+        centre_secondaire = CentreImmersion.objects.create(
             region=self.region,
             code="CENTRE-002",
             nom="Centre secondaire",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=40,
+        )
+        session = SessionImmersion.objects.create(
+            nom="Session capacité régionale 2026",
+            annee=2026,
+            numero_promotion=99,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=date(2026, 8, 1),
+            date_fin=date(2026, 8, 31),
+            statut=SessionImmersion.Statut.EN_PREPARATION,
+        )
+        RegleOrganisationCentre.objects.create(
+            session=session,
+            centre=self.centre,
+            capacite_ouverte=100,
+            seuil_division_sections=100,
+            capacite_max_section=100,
+            seuil_division_groupes=50,
+            capacite_max_groupe=50,
+            statut=RegleOrganisationCentre.Statut.VALIDEE,
+        )
+        RegleOrganisationCentre.objects.create(
+            session=session,
+            centre=centre_secondaire,
+            capacite_ouverte=40,
+            seuil_division_sections=40,
+            capacite_max_section=40,
+            seuil_division_groupes=20,
+            capacite_max_groupe=20,
+            statut=RegleOrganisationCentre.Statut.VALIDEE,
         )
 
         capacites = CapaciteAffectationService.capacites_regions(
-            session_id=999999,
+            session_id=session.id,
             region_ids=[self.region.id],
         )
 
@@ -356,7 +391,6 @@ class SerializersAffectationsTests(SimpleTestCase):
                 "nom": "Centre principal",
                 "province": "Kadiogo",
                 "ville": "Ouagadougou",
-                "capacite_totale": 100,
                 "publics_acceptes": ["BAC", "BAC"],
                 "niveaux_acceptes": ["BAC_D"],
             }

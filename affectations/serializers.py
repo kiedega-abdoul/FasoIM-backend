@@ -204,7 +204,6 @@ class CentreImmersionResumeSerializer(serializers.ModelSerializer):
             "nom",
             "province",
             "ville",
-            "capacite_totale",
             "genre",
             "statut",
         ]
@@ -225,7 +224,6 @@ class CentreImmersionDetailSerializer(serializers.ModelSerializer):
             "province",
             "ville",
             "adresse",
-            "capacite_totale",
             "genre",
             "publics_acceptes",
             "niveaux_acceptes",
@@ -252,7 +250,6 @@ class CentreImmersionInputSerializer(serializers.Serializer):
         allow_blank=True,
         default="",
     )
-    capacite_totale = serializers.IntegerField(min_value=0)
     genre = serializers.ChoiceField(
         choices=CentreImmersion.Genre.choices,
         required=False,
@@ -322,7 +319,6 @@ class CentreImmersionUpdateSerializer(CentreImmersionInputSerializer):
     province = serializers.CharField(max_length=150, required=False)
     ville = serializers.CharField(max_length=150, required=False)
     adresse = serializers.CharField(required=False, allow_blank=True)
-    capacite_totale = serializers.IntegerField(min_value=0, required=False)
     genre = serializers.ChoiceField(
         choices=CentreImmersion.Genre.choices,
         required=False,

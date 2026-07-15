@@ -57,8 +57,33 @@ class RegleOrganisationCentreService:
     """Création, modification et validation des règles locales du centre."""
 
     @staticmethod
+    def _verifier_capacite_ouverte(*, session, centre, capacite_ouverte, occupation=0):
+        capacite_ouverte = int(capacite_ouverte)
+        if capacite_ouverte < int(occupation):
+            raise ValidationOrganisationErreur({
+                "capacite_ouverte": (
+                    "La capacité ouverte ne peut pas être inférieure au nombre "
+                    "d'affectations centre déjà ouvertes."
+                )
+            })
+        parametres = getattr(session, "parametres", None)
+        if parametres and parametres.hebergement_active:
+            capacite_physique = LitRepository.compter_exploitables_par_centre(centre.id)
+            if capacite_ouverte > capacite_physique:
+                raise ValidationOrganisationErreur({
+                    "capacite_ouverte": (
+                        f"La capacité ouverte ({capacite_ouverte}) dépasse les "
+                        f"{capacite_physique} lits exploitables du centre."
+                    )
+                })
+
+    @staticmethod
     @transaction.atomic
     def creer(*, session, centre, acteur=None, **donnees):
+        RegleOrganisationCentreService._verifier_capacite_ouverte(
+            session=session, centre=centre,
+            capacite_ouverte=donnees.get("capacite_ouverte"), occupation=0,
+        )
         if RegleOrganisationCentreRepository.existe_pour_session_centre(
             session.id,
             centre.id,
@@ -93,6 +118,15 @@ class RegleOrganisationCentreService:
                 "Une organisation prête pour publication doit d'abord être "
                 "rouverte avant modification."
             )
+
+        nouvelle_capacite = donnees.get("capacite_ouverte", regle.capacite_ouverte)
+        occupation = CandidatsOrganisationRepository.compter_affectations_centre_actives(
+            session_id=regle.session_id, centre_id=regle.centre_id,
+        )
+        RegleOrganisationCentreService._verifier_capacite_ouverte(
+            session=regle.session, centre=regle.centre,
+            capacite_ouverte=nouvelle_capacite, occupation=occupation,
+        )
 
         for champ, valeur in donnees.items():
             setattr(regle, champ, valeur)
@@ -149,6 +183,11 @@ class RegleOrganisationCentreService:
                 affectation_centre__session_id=session_id,
                 affectation_centre__centre_id=centre_id,
             ).count()
+        )
+
+        RegleOrganisationCentreService._verifier_capacite_ouverte(
+            session=regle.session, centre=regle.centre,
+            capacite_ouverte=regle.capacite_ouverte, occupation=total_centre,
         )
 
         erreurs = {}

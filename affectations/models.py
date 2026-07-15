@@ -61,10 +61,23 @@ class RegionImmersion(models.Model):
         return self.deleted_at is None and self.statut == self.Statut.ACTIVE
 
     def supprimer_logiquement(self):
-        """Supprime logiquement la région en brouillant son code unique."""
+        """Supprime logiquement une région seulement si elle n'est plus utilisée."""
 
         if self.deleted_at:
             return self
+
+        if self.centres.filter(deleted_at__isnull=True).exists():
+            raise ValidationError(
+                "Une région contenant encore des centres ne peut pas être supprimée."
+            )
+
+        if self.affectations_regionales.filter(
+            statut__in=["PROPOSEE", "ACTIVE"],
+            deleted_at__isnull=True,
+        ).exists():
+            raise ValidationError(
+                "Une région possédant des affectations ouvertes ne peut pas être supprimée."
+            )
 
         self.code = brouiller_code_unique(self.code)
         self.statut = self.Statut.DESACTIVEE
@@ -101,8 +114,6 @@ class CentreImmersion(models.Model):
     province = models.CharField(max_length=150)
     ville = models.CharField(max_length=150)
     adresse = models.TextField(blank=True)
-    capacite_totale = models.PositiveIntegerField(default=0)
-
     genre = models.CharField(
         max_length=20,
         choices=Genre.choices,
@@ -139,12 +150,6 @@ class CentreImmersion(models.Model):
             models.Index(fields=["region", "statut"]),
             models.Index(fields=["deleted_at"]),
         ]
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(capacite_totale__gte=0),
-                name="centre_immersion_capacite_positive",
-            ),
-        ]
 
     def __str__(self):
         return f"{self.nom} - {self.region.nom}"
@@ -158,6 +163,9 @@ class CentreImmersion(models.Model):
 
         erreurs = {}
 
+        if self.region_id and not self.region.est_active:
+            erreurs["region"] = "Le centre doit appartenir à une région active."
+
         if self.publics_acceptes is not None and not isinstance(self.publics_acceptes, list):
             erreurs["publics_acceptes"] = "La valeur doit être une liste."
 
@@ -168,10 +176,23 @@ class CentreImmersion(models.Model):
             raise ValidationError(erreurs)
 
     def supprimer_logiquement(self):
-        """Supprime logiquement le centre en brouillant son code unique."""
+        """Supprime logiquement le centre seulement si aucune dépendance ouverte ne subsiste."""
 
         if self.deleted_at:
             return self
+
+        if self.affectations_centres.filter(
+            statut__in=["PROPOSEE", "ACTIVE"],
+            deleted_at__isnull=True,
+        ).exists():
+            raise ValidationError(
+                "Un centre possédant des affectations ouvertes ne peut pas être supprimé."
+            )
+
+        if self.dortoirs.filter(deleted_at__isnull=True).exists():
+            raise ValidationError(
+                "Un centre contenant encore des dortoirs ne peut pas être supprimé."
+            )
 
         self.code = brouiller_code_unique(self.code)
         self.statut = self.Statut.DESACTIVE

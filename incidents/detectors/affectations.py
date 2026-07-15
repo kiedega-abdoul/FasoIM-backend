@@ -138,23 +138,34 @@ def detecter():
                 est_bloquante=True,
             )
 
+    from organisation.models import RegleOrganisationCentre
+
     occupations = (
         AffectationCentre.objects.filter(
             statut=AffectationCentre.Statut.ACTIVE,
             deleted_at__isnull=True,
         )
-        .values("session_id", "centre_id", "centre__nom", "centre__capacite_totale")
+        .values("session_id", "centre_id", "centre__nom")
         .annotate(effectif=Count("id"))
-        .filter(effectif__gt=F("centre__capacite_totale")).iterator(chunk_size=taille_lot)
+        .iterator(chunk_size=taille_lot)
     )
+    capacites = {
+        (int(ligne["session_id"]), int(ligne["centre_id"])): int(ligne["capacite_ouverte"] or 0)
+        for ligne in RegleOrganisationCentre.objects.filter(
+            deleted_at__isnull=True,
+        ).values("session_id", "centre_id", "capacite_ouverte")
+    }
     for ligne in occupations:
+        capacite = capacites.get((int(ligne["session_id"]), int(ligne["centre_id"])), 0)
+        if ligne["effectif"] <= capacite:
+            continue
         yield Anomalie(
             code="AFF_CENTRE_SURCAPACITE",
             cle=f"AFF_CENTRE_SURCAPACITE:{ligne['session_id']}:{ligne['centre_id']}",
             titre=f"Centre en surcapacité : {ligne['centre__nom']}",
             description=(
                 f"Le centre compte {ligne['effectif']} affectations actives pour une capacité de "
-                f"{ligne['centre__capacite_totale']}."
+                f"{capacite}."
             ),
             categorie=AlerteIncident.Categorie.AFFECTATION,
             gravite=AlerteIncident.NiveauGravite.CRITIQUE,
@@ -165,7 +176,7 @@ def detecter():
             modele_source="CentreImmersion",
             objet_source_id=ligne["centre_id"],
             est_bloquante=True,
-            contexte={"effectif": ligne["effectif"], "capacite": ligne["centre__capacite_totale"]},
+            contexte={"effectif": ligne["effectif"], "capacite": capacite},
         )
 
     seuil = maintenant - timedelta(hours=24)

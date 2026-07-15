@@ -86,7 +86,6 @@ class BaseIncidentTest(TestCase):
             nom="Centre test incidents",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=100,
         )
         aujourd_hui = timezone.localdate()
         self.session = SessionImmersion.objects.create(
@@ -238,7 +237,6 @@ class SignalementIncidentTests(BaseIncidentTest):
             nom="Centre Nord",
             province="Yatenga",
             ville="Ouahigouya",
-            capacite_totale=50,
         )
         with self.assertRaises(ValidationIncidentErreur):
             self.signaler(
@@ -515,7 +513,6 @@ class PerimetreEtConfidentialiteTests(BaseIncidentTest):
             nom="Centre Est",
             province="Gourma",
             ville="Fada N'Gourma",
-            capacite_totale=80,
         )
         visible = self.signaler()
         cache = AlerteIncident.objects.create(

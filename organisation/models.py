@@ -46,6 +46,14 @@ class RegleOrganisationCentre(models.Model):
         on_delete=models.PROTECT,
         related_name="regles_organisation",
     )
+    
+    capacite_ouverte = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+        help_text=(
+            "Nombre maximal de places mises à disposition par le centre "
+            "pour cette session."
+        ),
+    )
 
     seuil_division_sections = models.PositiveIntegerField(
         validators=[MinValueValidator(2)],
@@ -166,12 +174,12 @@ class RegleOrganisationCentre(models.Model):
 
         if (
             self.capacite_max_section
-            and self.centre_id
-            and self.capacite_max_section > self.centre.capacite_totale
+            and self.capacite_ouverte
+            and self.capacite_max_section > self.capacite_ouverte
         ):
             erreurs["capacite_max_section"] = (
                 "La capacité maximale d'une section ne peut pas dépasser "
-                "la capacité totale du centre."
+                "la capacité ouverte du centre pour cette session."
             )
 
         if (
@@ -317,16 +325,6 @@ class Section(models.Model):
 
         if self.centre_id and not self.centre.est_actif:
             erreurs["centre"] = "Le centre de la section n'est pas actif."
-
-        if (
-            self.centre_id
-            and self.capacite_max
-            and self.capacite_max > self.centre.capacite_totale
-        ):
-            erreurs["capacite_max"] = (
-                "La capacité de la section ne peut pas dépasser "
-                "la capacité totale du centre."
-            )
 
         if erreurs:
             raise ValidationError(erreurs)
@@ -710,20 +708,19 @@ class Dortoir(models.Model):
         if self.centre_id and not self.centre.est_actif:
             erreurs["centre"] = "Le centre du dortoir n'est pas actif."
 
-        if (
-            self.centre_id
-            and self.capacite
-            and self.capacite > self.centre.capacite_totale
-        ):
-            erreurs["capacite"] = (
-                "La capacité du dortoir ne peut pas dépasser "
-                "la capacité totale du centre."
-            )
-
         if erreurs:
             raise ValidationError(erreurs)
 
     def mettre_hors_service(self):
+        if AttributionLit.objects.filter(
+            lit__dortoir=self,
+            statut__in=STATUTS_ATTRIBUTION_LIT_OUVERTS,
+            deleted_at__isnull=True,
+        ).exists():
+            raise ValidationError(
+                "Un dortoir ayant des attributions de lits ouvertes ne peut pas être mis hors service."
+            )
+
         self.statut = self.Statut.HORS_SERVICE
         self.save(update_fields=["statut", "updated_at"])
         return self
@@ -811,7 +808,32 @@ class Lit(models.Model):
             and self.dortoir.est_actif
         )
 
+    def clean(self):
+        erreurs = {}
+
+        if self.dortoir_id and not self.dortoir.est_actif:
+            erreurs["dortoir"] = "Le dortoir du lit doit être actif."
+
+        if self.dortoir_id:
+            lits_existants = self.dortoir.lits.filter(deleted_at__isnull=True)
+            if self.pk:
+                lits_existants = lits_existants.exclude(pk=self.pk)
+            if lits_existants.count() >= self.dortoir.capacite:
+                erreurs["dortoir"] = (
+                    "La capacité maximale de ce dortoir est déjà atteinte."
+                )
+
+        if erreurs:
+            raise ValidationError(erreurs)
+
     def mettre_hors_service(self):
+        if self.attributions.filter(
+            statut__in=STATUTS_ATTRIBUTION_LIT_OUVERTS,
+            deleted_at__isnull=True,
+        ).exists():
+            raise ValidationError(
+                "Un lit possédant une attribution ouverte ne peut pas être mis hors service."
+            )
         self.statut = self.Statut.HORS_SERVICE
         self.save(update_fields=["statut", "updated_at"])
         return self

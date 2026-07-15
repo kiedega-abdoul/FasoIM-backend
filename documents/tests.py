@@ -123,7 +123,6 @@ class DocumentsTests(TestCase):
             province="Kadiogo",
             ville="Ouagadougou",
             adresse="Secteur 12",
-            capacite_totale=100,
             genre=CentreImmersion.Genre.MIXTE,
             publics_acceptes=[],
             niveaux_acceptes=[],
@@ -173,6 +172,7 @@ class DocumentsTests(TestCase):
         self.regle = RegleOrganisationCentre.objects.create(
             session=self.session,
             centre=self.centre,
+            capacite_ouverte=100,
             seuil_division_sections=2,
             capacite_max_section=100,
             seuil_division_groupes=2,

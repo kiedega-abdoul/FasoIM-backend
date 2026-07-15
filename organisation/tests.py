@@ -107,7 +107,6 @@ class OrganisationFixtureMixin:
             nom="Centre FasoIM organisation",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=500,
             genre=CentreImmersion.Genre.MIXTE,
             publics_acceptes=[],
             niveaux_acceptes=[],
@@ -115,6 +114,7 @@ class OrganisationFixtureMixin:
         self.regle = RegleOrganisationCentre.objects.create(
             session=self.session,
             centre=self.centre,
+            capacite_ouverte=500,
             seuil_division_sections=100,
             capacite_max_section=100,
             seuil_division_groupes=50,
@@ -371,6 +371,7 @@ class AlgorithmesOrganisationTests(SimpleTestCase):
             data={
                 "session_id": 1,
                 "centre_id": 1,
+                "capacite_ouverte": 100,
                 "seuil_division_sections": 100,
                 "capacite_max_section": 30,
                 "seuil_division_groupes": 20,

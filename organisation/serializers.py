@@ -41,6 +41,7 @@ class RegleOrganisationCentreSerializer(serializers.ModelSerializer):
             "id",
             "session",
             "centre",
+            "capacite_ouverte",
             "seuil_division_sections",
             "capacite_max_section",
             "seuil_division_groupes",
@@ -72,6 +73,7 @@ class RegleOrganisationCentreSerializer(serializers.ModelSerializer):
 class RegleOrganisationCentreInputSerializer(serializers.Serializer):
     session_id = serializers.IntegerField(min_value=1)
     centre_id = serializers.IntegerField(min_value=1)
+    capacite_ouverte = serializers.IntegerField(min_value=1)
     seuil_division_sections = serializers.IntegerField(min_value=2)
     capacite_max_section = serializers.IntegerField(min_value=1)
     seuil_division_groupes = serializers.IntegerField(min_value=2)
@@ -190,6 +192,10 @@ class RegleOrganisationCentreUpdateSerializer(serializers.Serializer):
     directives_locales = serializers.CharField(
         required=False,
         allow_blank=True,
+    )
+    capacite_ouverte = serializers.IntegerField(
+        min_value=1,
+        required=False,
     )
 
 

@@ -267,13 +267,14 @@ class CapaciteAffectationService:
     def capacites_regions(session_id: int, region_ids: list[int]) -> dict[int, dict]:
         capacites = {
             int(ligne["region_id"]): {
-                "capacite_totale": int(ligne["capacite_totale_centres"] or 0),
+                "capacite_totale": int(ligne["capacite_ouverte_centres"] or 0),
+                "capacite_ouverte": int(ligne["capacite_ouverte_centres"] or 0),
                 "nombre_centres": int(ligne["nombre_centres"] or 0),
                 "occupation_ouverte": 0,
-                "disponible": int(ligne["capacite_totale_centres"] or 0),
+                "disponible": int(ligne["capacite_ouverte_centres"] or 0),
             }
-            for ligne in CentreImmersionRepository.capacites_totales_par_region(
-                region_ids=region_ids
+            for ligne in CentreImmersionRepository.capacites_ouvertes_par_region(
+                session_id=session_id, region_ids=region_ids
             )
         }
 
@@ -282,6 +283,7 @@ class CapaciteAffectationService:
                 int(region_id),
                 {
                     "capacite_totale": 0,
+                    "capacite_ouverte": 0,
                     "nombre_centres": 0,
                     "occupation_ouverte": 0,
                     "disponible": 0,
@@ -297,6 +299,7 @@ class CapaciteAffectationService:
                 region_id,
                 {
                     "capacite_totale": 0,
+                    "capacite_ouverte": 0,
                     "nombre_centres": 0,
                     "occupation_ouverte": 0,
                     "disponible": 0,
@@ -319,13 +322,19 @@ class CapaciteAffectationService:
         centres: list[dict],
         region_id: int,
     ) -> dict[int, dict]:
+        centre_ids = [int(centre["id"]) for centre in centres]
+        ouvertes = CentreImmersionRepository.capacites_ouvertes_par_centres(
+            session_id=session_id,
+            centre_ids=centre_ids,
+        )
         capacites = {
-            int(centre["id"]): {
-                "capacite_totale": int(centre["capacite_totale"] or 0),
+            centre_id: {
+                "capacite_totale": int(ouvertes.get(centre_id, 0)),
+                "capacite_ouverte": int(ouvertes.get(centre_id, 0)),
                 "occupation_ouverte": 0,
-                "disponible": int(centre["capacite_totale"] or 0),
+                "disponible": int(ouvertes.get(centre_id, 0)),
             }
-            for centre in centres
+            for centre_id in centre_ids
         }
 
         for ligne in AffectationCentreRepository.compter_par_centre_et_statuts(
@@ -641,6 +650,21 @@ class AffectationRegionaleService:
             raise ValidationAffectationErreur(
                 {"affectations": "Une ou plusieurs propositions sont introuvables."}
             )
+
+        capacites = CapaciteAffectationService.capacites_regions(
+            session_id=affectations[0].session_id if affectations else 0,
+            region_ids=list({affectation.region_id for affectation in affectations}),
+        )
+        for region_id, donnees in capacites.items():
+            if int(donnees["occupation_ouverte"]) > int(donnees["capacite_ouverte"]):
+                raise ValidationAffectationErreur(
+                    {
+                        "capacite": (
+                            "La capacité de la région est dépassée. "
+                            "Réduisez ou redistribuez les propositions avant validation."
+                        )
+                    }
+                )
 
         maintenant = timezone.now()
         immerges = {
@@ -1008,7 +1032,6 @@ class AffectationCentreService:
             "nom": centre.nom,
             "province": centre.province,
             "ville": centre.ville,
-            "capacite_totale": centre.capacite_totale,
             "genre": centre.genre,
             "publics_acceptes": centre.publics_acceptes,
             "niveaux_acceptes": centre.niveaux_acceptes,

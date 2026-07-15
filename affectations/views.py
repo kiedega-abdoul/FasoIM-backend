@@ -456,7 +456,6 @@ class CentreImmersionViewSet(AffectationsViewSetBase):
 
         donnees_centre = {
             "id": centre.id,
-            "capacite_totale": centre.capacite_totale,
         }
         capacites = CapaciteAffectationService.capacites_centres(
             session_id=int(session_id),

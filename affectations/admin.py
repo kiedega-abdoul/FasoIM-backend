@@ -54,7 +54,6 @@ class CentreImmersionAdmin(SoftDeleteAdminMixin, admin.ModelAdmin):
         "region",
         "province",
         "ville",
-        "capacite_totale",
         "genre",
         "statut",
         "deleted_at",
@@ -72,8 +71,8 @@ class CentreImmersionAdmin(SoftDeleteAdminMixin, admin.ModelAdmin):
         ("Localisation", {
             "fields": ("province", "ville", "adresse"),
         }),
-        ("Capacité et publics", {
-            "fields": ("capacite_totale", "genre", "publics_acceptes", "niveaux_acceptes"),
+        ("Publics accueillis", {
+            "fields": ("genre", "publics_acceptes", "niveaux_acceptes"),
         }),
         ("État", {
             "fields": ("statut",),

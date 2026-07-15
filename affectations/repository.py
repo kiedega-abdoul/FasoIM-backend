@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from django.db import models
 from django.db.models import Count, Exists, OuterRef, Q, Sum, Value
 from django.db.models.functions import Coalesce
 
@@ -207,31 +208,48 @@ class CentreImmersionRepository:
             "nom",
             "province",
             "ville",
-            "capacite_totale",
             "genre",
             "publics_acceptes",
             "niveaux_acceptes",
         )
 
     @staticmethod
-    def capacites_totales_par_region(*, region_ids=None):
-        """Somme SQL des capacités des centres actifs, sans déduire l'occupation."""
+    def capacites_ouvertes_par_region(*, session_id, region_ids=None):
+        from organisation.models import RegleOrganisationCentre
 
-        queryset = CentreImmersionRepository.lister_actifs().order_by()
+        queryset = RegleOrganisationCentre.objects.filter(
+            session_id=session_id,
+            deleted_at__isnull=True,
+            centre__deleted_at__isnull=True,
+            centre__statut=CentreImmersion.Statut.ACTIF,
+            centre__region__deleted_at__isnull=True,
+            centre__region__statut=RegionImmersion.Statut.ACTIVE,
+        )
         if region_ids:
-            queryset = queryset.filter(region_id__in=_liste_ids(region_ids))
-
+            queryset = queryset.filter(centre__region_id__in=_liste_ids(region_ids))
         return (
-            queryset.values("region_id")
+            queryset.values(region_id=models.F("centre__region_id"))
             .annotate(
-                capacite_totale_centres=Coalesce(
-                    Sum("capacite_totale"),
-                    Value(0),
-                ),
-                nombre_centres=Count("id"),
+                capacite_ouverte_centres=Coalesce(Sum("capacite_ouverte"), Value(0)),
+                nombre_centres=Count("centre_id", distinct=True),
             )
             .order_by("region_id")
         )
+
+    @staticmethod
+    def capacites_ouvertes_par_centres(*, session_id, centre_ids):
+        from organisation.models import RegleOrganisationCentre
+
+        return {
+            int(ligne["centre_id"]): int(ligne["capacite_ouverte"] or 0)
+            for ligne in RegleOrganisationCentre.objects.filter(
+                session_id=session_id,
+                centre_id__in=_liste_ids(centre_ids),
+                deleted_at__isnull=True,
+                centre__deleted_at__isnull=True,
+                centre__statut=CentreImmersion.Statut.ACTIF,
+            ).values("centre_id", "capacite_ouverte")
+        }
 
     @staticmethod
     def filtrer(

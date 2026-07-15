@@ -68,7 +68,6 @@ class NotificationsTests(TestCase):
             nom="Centre test",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=100,
         )
         self.acteur = Acteur.objects.create_user(
             username="admin.test",
@@ -375,6 +374,7 @@ class NotificationsTests(TestCase):
         regle = RegleOrganisationCentre.objects.create(
             session=self.session,
             centre=self.centre,
+            capacite_ouverte=50,
             seuil_division_sections=2,
             capacite_max_section=50,
             seuil_division_groupes=2,
