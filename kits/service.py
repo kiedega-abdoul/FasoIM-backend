@@ -202,6 +202,19 @@ class ArticleKitService:
                 }
             )
 
+        if (
+            type_kit == ArticleKit.TypeKit.A_REMETTRE
+            and centre is not None
+        ):
+            raise ValidationKitErreur(
+                {
+                    "centre_id": (
+                        "Un article à remettre est défini pour "
+                        "tous les centres de la session."
+                    )
+                }
+            )
+
     @staticmethod
     def _exiger_permission_creation(
         *,

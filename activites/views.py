@@ -55,6 +55,7 @@ from .serializers import (
     PresenceSerializer,
     PresenceUpdateSerializer,
     ProgressionActiviteSerializer,
+    ProgrammerEvaluationSerializer,
     RecalculIndicateursSerializer,
     ReporterSeanceSerializer,
     SaisieNotesMasseSerializer,
@@ -553,6 +554,19 @@ class PresenceViewSet(viewsets.ModelViewSet):
 
 class EvaluationViewSet(viewsets.ModelViewSet):
     permission_classes = [PermissionEvaluation]
+
+    @action(detail=False, methods=["post"], url_path="programmer")
+    def programmer(self, request):
+        serializer = ProgrammerEvaluationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            evaluation = EvaluationService.programmer_evaluation(
+                acteur=request.user,
+                **serializer.validated_data,
+            )
+        except Exception as exception:
+            lever_erreur_service(exception)
+        return Response(EvaluationSerializer(evaluation).data, status=status.HTTP_201_CREATED)
 
     def get_queryset(self):
         if self.kwargs.get("pk"):

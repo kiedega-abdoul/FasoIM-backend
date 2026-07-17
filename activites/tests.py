@@ -271,10 +271,12 @@ class ActivitesFixtureMixin:
         heure_debut=time(8, 0),
         heure_fin=time(10, 0),
         statut=Seance.Statut.PLANIFIEE,
-        titre="",
+        titre="Séance de test",
+        type_seance=Seance.TypeSeance.ACTIVITE,
     ):
         return Seance.objects.create(
-            module_activite=module or self.creer_module(),
+            module_activite=(module or self.creer_module()) if type_seance == Seance.TypeSeance.ACTIVITE else None,
+            type_seance=type_seance,
             session=self.session,
             centre=centre or self.centre,
             section=section,
@@ -299,7 +301,11 @@ class ActivitesFixtureMixin:
         statut=Evaluation.Statut.BROUILLON,
         date_evaluation=None,
     ):
-        seance = seance or self.creer_seance()
+        seance = seance or self.creer_seance(type_seance=Seance.TypeSeance.EVALUATION)
+        if seance.type_seance != Seance.TypeSeance.EVALUATION:
+            seance.type_seance = Seance.TypeSeance.EVALUATION
+            seance.module_activite = None
+            seance.save(update_fields=["type_seance", "module_activite", "updated_at"])
         date_evaluation = date_evaluation or timezone.make_aware(
             datetime.combine(seance.date_seance, seance.heure_debut)
         )
@@ -480,15 +486,10 @@ class ModelesActivitesTests(ActivitesFixtureMixin, TestCase):
                 coefficient=Decimal("0.00")
             )
 
-    def test_evaluation_retrouve_module_par_seance(self):
-        module = self.creer_module()
-        seance = self.creer_seance(module=module)
-        evaluation = self.creer_evaluation(seance=seance)
-
-        self.assertEqual(
-            evaluation.module_activite.id,
-            module.id,
-        )
+    def test_evaluation_est_une_seance_sans_module(self):
+        evaluation = self.creer_evaluation()
+        self.assertEqual(evaluation.seance.type_seance, Seance.TypeSeance.EVALUATION)
+        self.assertIsNone(evaluation.module_activite)
 
     def test_note_ne_depasse_pas_bareme(self):
         evaluation = self.creer_evaluation(
@@ -701,13 +702,12 @@ class ServicesActivitesTests(
     def test_service_cree_activite_globale(self):
         module = ActiviteService.creer_activite(
             acteur=self.acteur,
-            code="ORI-001",
             titre="Orientation professionnelle",
             categorie=ModuleActivite.Categorie.ORIENTATION,
             duree_prevue=60,
         )
 
-        self.assertEqual(module.code, "ORI-001")
+        self.assertTrue(module.code.startswith("ACT-ORI-"))
         self.assertFalse(hasattr(module, "session_id"))
 
     def test_service_refuse_doublon_activite(self):
@@ -716,8 +716,7 @@ class ServicesActivitesTests(
         with self.assertRaises(ValidationActiviteErreur):
             ActiviteService.creer_activite(
                 acteur=self.acteur,
-                code="CIV-001",
-                titre="Autre titre",
+                titre="Civisme et citoyenneté",
                 categorie=ModuleActivite.Categorie.CIVISME,
             )
 
@@ -991,7 +990,9 @@ class ServicesActivitesTests(
         self.assertEqual(resultat["dispenses"], 1)
 
     def test_creation_evaluation_commence_en_brouillon(self):
-        seance = self.creer_seance()
+        seance = self.creer_seance(
+            type_seance=Seance.TypeSeance.EVALUATION
+        )
         evaluation = EvaluationService.creer_evaluation(
             acteur=self.acteur,
             session_id=self.session.id,
@@ -1169,7 +1170,7 @@ class ServicesActivitesTests(
             statut=Evaluation.Statut.CLOTUREE,
         )
         evaluation_2 = self.creer_evaluation(
-            seance=seance,
+            seance=self.creer_seance(type_seance=Seance.TypeSeance.EVALUATION, date_seance=date(2026, 8, 12), heure_debut=time(11, 0), heure_fin=time(12, 0), titre="Évaluation 2"),
             titre="Évaluation 2",
             coefficient=Decimal("2.00"),
             statut=Evaluation.Statut.CLOTUREE,
@@ -1594,7 +1595,6 @@ class ApiActivitesTests(ActivitesFixtureMixin, TestCase):
         reponse = self.client.post(
             "/api/activites/activites/",
             {
-                "code": "SPT-API",
                 "titre": "Sport API",
                 "categorie": "SPORT",
                 "duree_prevue": 60,
@@ -1603,7 +1603,7 @@ class ApiActivitesTests(ActivitesFixtureMixin, TestCase):
         )
 
         self.assertEqual(reponse.status_code, 201)
-        self.assertEqual(reponse.data["code"], "SPT-API")
+        self.assertTrue(reponse.data["code"].startswith("ACT-SPO-"))
 
     def test_liste_seances_accepte_perimetre(self):
         self.creer_seance()
@@ -1631,7 +1631,9 @@ class ApiActivitesTests(ActivitesFixtureMixin, TestCase):
         )
 
     def test_creation_evaluation_par_api(self):
-        seance = self.creer_seance()
+        seance = self.creer_seance(
+            type_seance=Seance.TypeSeance.EVALUATION
+        )
         reponse = self.client.post(
             "/api/activites/evaluations/",
             {
@@ -1649,6 +1651,37 @@ class ApiActivitesTests(ActivitesFixtureMixin, TestCase):
 
         self.assertEqual(reponse.status_code, 201)
         self.assertEqual(reponse.data["statut"], "BROUILLON")
+
+    def test_programmation_evaluation_cree_seance_evaluation(self):
+        reponse = self.client.post(
+            "/api/activites/evaluations/programmer/",
+            {
+                "session_id": self.session.id,
+                "centre_id": self.centre.id,
+                "module_activite_id": self.module.id,
+                "formateur_id": self.formateur.id,
+                "titre": "Évaluation programmée",
+                "date_seance": "2026-08-15",
+                "heure_debut": "10:00:00",
+                "heure_fin": "11:00:00",
+                "lieu": "Salle 1",
+                "type_evaluation": "TEST",
+                "bareme": "20.00",
+                "coefficient": "1.00",
+                "observations": "",
+            },
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, 201, reponse.data)
+        evaluation = Evaluation.objects.get(id=reponse.data["id"])
+        self.assertEqual(
+            evaluation.seance.type_seance,
+            Seance.TypeSeance.EVALUATION,
+        )
+        self.assertEqual(evaluation.seance.titre, "Évaluation programmée")
+        self.assertEqual(evaluation.seance.module_activite_id, self.module.id)
+        self.assertEqual(evaluation.seance.formateur_id, self.formateur.id)
 
     @patch(
         "activites.views."

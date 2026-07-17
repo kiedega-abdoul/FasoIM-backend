@@ -237,6 +237,7 @@ class DocumentsTests(TestCase):
         )
         seance = Seance.objects.create(
             module_activite=module,
+            type_seance=Seance.TypeSeance.EVALUATION,
             session=self.session,
             centre=self.centre,
             groupe=self.groupe,

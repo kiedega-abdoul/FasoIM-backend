@@ -581,6 +581,16 @@ class ServicesKitsTests(KitsFixtureMixin, TestCase):
                 type_kit=ArticleKit.TypeKit.A_APPORTER,
             )
 
+    def test_service_refuse_a_remettre_limite_a_un_centre(self):
+        with self.assertRaises(ValidationKitErreur):
+            ArticleKitService.creer(
+                acteur=self.agent,
+                session_id=self.session.id,
+                centre_id=self.centre.id,
+                designation="Badge limité",
+                type_kit=ArticleKit.TypeKit.A_REMETTRE,
+            )
+
     @patch("kits.service.ControleAccesService.acteur_peut")
     def test_creation_a_remettre_utilise_permission_dgas(
         self,

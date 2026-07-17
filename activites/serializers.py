@@ -106,7 +106,6 @@ class ModuleActiviteSerializer(serializers.ModelSerializer):
 
 
 class ModuleActiviteCreateSerializer(serializers.Serializer):
-    code = serializers.CharField(max_length=60)
     titre = serializers.CharField(max_length=180)
     description = serializers.CharField(
         required=False,
@@ -132,10 +131,6 @@ class ModuleActiviteCreateSerializer(serializers.Serializer):
 
 
 class ModuleActiviteUpdateSerializer(serializers.Serializer):
-    code = serializers.CharField(
-        max_length=60,
-        required=False,
-    )
     titre = serializers.CharField(
         max_length=180,
         required=False,
@@ -214,6 +209,10 @@ class SeanceResumeSerializer(serializers.ModelSerializer):
 
 class SeanceSerializer(serializers.ModelSerializer):
     module_activite = ModuleActiviteSerializer(read_only=True)
+    type_seance_libelle = serializers.CharField(
+        source="get_type_seance_display",
+        read_only=True,
+    )
     session = SessionActiviteResumeSerializer(read_only=True)
     centre = CentreActiviteResumeSerializer(read_only=True)
     section = SectionActiviteResumeSerializer(
@@ -250,6 +249,8 @@ class SeanceSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "module_activite",
+            "type_seance",
+            "type_seance_libelle",
             "session",
             "centre",
             "section",
@@ -275,7 +276,8 @@ class SeanceSerializer(serializers.ModelSerializer):
 
 
 class SeanceCreateSerializer(serializers.Serializer):
-    module_activite_id = serializers.IntegerField(min_value=1)
+    type_seance = serializers.ChoiceField(choices=Seance.TypeSeance.choices, default=Seance.TypeSeance.ACTIVITE)
+    module_activite_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
     session_id = serializers.IntegerField(min_value=1)
     centre_id = serializers.IntegerField(min_value=1)
     section_id = serializers.IntegerField(
@@ -330,6 +332,7 @@ class SeanceCreateSerializer(serializers.Serializer):
 
 
 class SeanceUpdateSerializer(serializers.Serializer):
+    type_seance = serializers.ChoiceField(choices=Seance.TypeSeance.choices, required=False)
     module_activite_id = serializers.IntegerField(
         min_value=1,
         required=False,
@@ -782,6 +785,27 @@ class EvaluationSerializer(serializers.ModelSerializer):
             obj.seance.module_activite
         ).data
 
+
+
+class ProgrammerEvaluationSerializer(serializers.Serializer):
+    session_id = serializers.IntegerField(min_value=1)
+    centre_id = serializers.IntegerField(min_value=1)
+    module_activite_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    formateur_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    titre = serializers.CharField(max_length=180)
+    date_seance = serializers.DateField()
+    heure_debut = serializers.TimeField()
+    heure_fin = serializers.TimeField()
+    lieu = serializers.CharField(max_length=180)
+    type_evaluation = serializers.ChoiceField(choices=Evaluation.TypeEvaluation.choices)
+    bareme = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=Decimal("0.01"))
+    coefficient = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=Decimal("0.01"), default="1.00")
+    observations = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        if attrs["heure_fin"] <= attrs["heure_debut"]:
+            raise serializers.ValidationError({"heure_fin": "L'heure de fin doit être postérieure à l'heure de début."})
+        return attrs
 
 class EvaluationCreateSerializer(serializers.Serializer):
     session_id = serializers.IntegerField(min_value=1)

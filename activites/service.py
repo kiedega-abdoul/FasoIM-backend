@@ -248,7 +248,6 @@ class ActiviteService(ServiceActiviteBase):
     PERMISSION_DESACTIVER = "desactiver_activite"
 
     CHAMPS_MODIFIABLES = {
-        "code",
         "titre",
         "description",
         "categorie",
@@ -263,7 +262,6 @@ class ActiviteService(ServiceActiviteBase):
         cls,
         *,
         acteur,
-        code,
         titre,
         categorie,
         description="",
@@ -277,7 +275,7 @@ class ActiviteService(ServiceActiviteBase):
         )
 
         if ModuleActiviteRepository.existe_doublon(
-            code=code,
+            code="",
             titre=titre,
             categorie=categorie,
         ):
@@ -287,7 +285,6 @@ class ActiviteService(ServiceActiviteBase):
             )
 
         return ModuleActiviteRepository.creer(
-            code=code,
             titre=titre,
             description=description,
             categorie=categorie,
@@ -408,6 +405,8 @@ class SeanceService(ServiceActiviteBase):
 
     @staticmethod
     def _module(module_activite_id):
+        if not module_activite_id:
+            return None
         try:
             return ModuleActiviteRepository.actifs().get(
                 id=module_activite_id
@@ -527,8 +526,9 @@ class SeanceService(ServiceActiviteBase):
         cls,
         *,
         acteur,
-        module_activite_id,
-        session_id,
+        module_activite_id=None,
+        type_seance=Seance.TypeSeance.ACTIVITE,
+        session_id=None,
         centre_id,
         date_seance,
         heure_debut,
@@ -589,6 +589,7 @@ class SeanceService(ServiceActiviteBase):
         try:
             return SeanceRepository.creer(
                 module_activite=module,
+                type_seance=type_seance,
                 session=session,
                 centre=centre,
                 section=section,
@@ -647,12 +648,7 @@ class SeanceService(ServiceActiviteBase):
         centre = cls._centre(
             donnees.get("centre_id", seance.centre_id)
         )
-        module = cls._module(
-            donnees.get(
-                "module_activite_id",
-                seance.module_activite_id,
-            )
-        )
+        module = cls._module(donnees.get("module_activite_id", seance.module_activite_id))
         section = cls._section(
             donnees.get("section_id", seance.section_id)
         )
@@ -698,6 +694,7 @@ class SeanceService(ServiceActiviteBase):
 
         correspondances = {
             "module_activite_id": ("module_activite", module),
+            "type_seance": ("type_seance", donnees.get("type_seance", seance.type_seance)),
             "session_id": ("session", session),
             "centre_id": ("centre", centre),
             "section_id": ("section", section),
@@ -1620,6 +1617,8 @@ class EvaluationService(ServiceActiviteBase):
             raise ValidationActiviteErreur(
                 "La séance n'appartient pas au centre."
             )
+        if seance.type_seance != Seance.TypeSeance.EVALUATION:
+            raise ValidationActiviteErreur("La séance sélectionnée n’est pas une séance d’évaluation.")
         if seance.statut in {
             Seance.Statut.ANNULEE,
             Seance.Statut.REPORTEE,
@@ -1700,6 +1699,53 @@ class EvaluationService(ServiceActiviteBase):
             statut=statut,
             created_by=acteur,
         )
+
+    @classmethod
+    @transaction.atomic
+    def programmer_evaluation(
+        cls,
+        *,
+        acteur,
+        session_id,
+        centre_id,
+        titre,
+        date_seance,
+        heure_debut,
+        heure_fin,
+        lieu,
+        type_evaluation,
+        bareme,
+        coefficient,
+        module_activite_id=None,
+        formateur_id=None,
+        observations="",
+    ):
+        seance = SeanceService.planifier_seance(
+            acteur=acteur,
+            session_id=session_id,
+            centre_id=centre_id,
+            module_activite_id=module_activite_id,
+            formateur_id=formateur_id,
+            type_seance=Seance.TypeSeance.EVALUATION,
+            titre=titre,
+            date_seance=date_seance,
+            heure_debut=heure_debut,
+            heure_fin=heure_fin,
+            lieu=lieu,
+            statut=Seance.Statut.PLANIFIEE,
+            observations=observations,
+        )
+        evaluation = cls.creer_evaluation(
+            acteur=acteur,
+            session_id=session_id,
+            centre_id=centre_id,
+            seance_id=seance.id,
+            titre=titre,
+            type_evaluation=type_evaluation,
+            bareme=bareme,
+            coefficient=coefficient,
+        )
+        return evaluation
 
     @classmethod
     @transaction.atomic

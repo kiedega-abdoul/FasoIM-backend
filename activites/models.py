@@ -28,7 +28,7 @@ class ModuleActivite(models.Model):
         INACTIF = "INACTIF", "Inactif"
 
     titre = models.CharField(max_length=180)
-    code = models.CharField(max_length=60)
+    code = models.CharField(max_length=60, blank=True, default="")
     description = models.TextField(blank=True)
     categorie = models.CharField(
         max_length=30,
@@ -109,9 +109,6 @@ class ModuleActivite(models.Model):
         if not self.titre:
             erreurs["titre"] = "Le titre du module est obligatoire."
 
-        if not self.code:
-            erreurs["code"] = "Le code du module est obligatoire."
-
         if (
             self.duree_prevue is not None
             and self.duree_prevue < 1
@@ -124,6 +121,9 @@ class ModuleActivite(models.Model):
             raise ValidationError(erreurs)
 
     def save(self, *args, **kwargs):
+        if not self.code:
+            prefixe = (self.categorie or "ACT")[:3].upper()
+            self.code = f"ACT-{prefixe}-{uuid4().hex[:8].upper()}"
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -168,7 +168,14 @@ class ModuleActivite(models.Model):
 
 
 class Seance(models.Model):
-    """Planification d'un module d'activité dans une session."""
+    """Événement programmé dans une session et un centre."""
+
+    class TypeSeance(models.TextChoices):
+        ACTIVITE = "ACTIVITE", "Activité"
+        EVALUATION = "EVALUATION", "Évaluation"
+        CEREMONIE = "CEREMONIE", "Cérémonie"
+        REUNION = "REUNION", "Réunion"
+        AUTRE = "AUTRE", "Autre"
 
     class Statut(models.TextChoices):
         BROUILLON = "BROUILLON", "Brouillon"
@@ -223,11 +230,8 @@ class Seance(models.Model):
         related_name="seances_animees",
     )
 
-    titre = models.CharField(
-        max_length=180,
-        blank=True,
-        default="",
-    )
+    type_seance = models.CharField(max_length=20, choices=TypeSeance.choices, default=TypeSeance.ACTIVITE, db_index=True)
+    titre = models.CharField(max_length=180)
     date_seance = models.DateField(db_index=True)
     heure_debut = models.TimeField()
     heure_fin = models.TimeField()
@@ -355,6 +359,12 @@ class Seance(models.Model):
         self.titre = (self.titre or "").strip()
         self.lieu = (self.lieu or "").strip()
         self.observations = (self.observations or "").strip()
+
+        if not self.titre:
+            erreurs["titre"] = "Le titre de la séance est obligatoire."
+
+        if self.type_seance == self.TypeSeance.EVALUATION and self.module_activite_id:
+            erreurs["module_activite"] = "Une séance d’évaluation ne dépend pas d’une activité du catalogue."
 
         if not self.lieu:
             erreurs["lieu"] = "Le lieu de la séance est obligatoire."
@@ -661,10 +671,10 @@ class Evaluation(models.Model):
         on_delete=models.PROTECT,
         related_name="evaluations_activite",
     )
-    seance = models.ForeignKey(
+    seance = models.OneToOneField(
         Seance,
         on_delete=models.PROTECT,
-        related_name="evaluations",
+        related_name="evaluation",
     )
 
     titre = models.CharField(max_length=180)
@@ -792,6 +802,8 @@ class Evaluation(models.Model):
                 )
 
         if self.seance_id:
+            if self.seance.type_seance != Seance.TypeSeance.EVALUATION:
+                erreurs["seance"] = "Une évaluation doit être liée à une séance de type ÉVALUATION."
             if self.seance.session_id != self.session_id:
                 erreurs["seance"] = (
                     "La séance et l'évaluation doivent appartenir "

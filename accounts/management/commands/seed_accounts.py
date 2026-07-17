@@ -657,10 +657,15 @@ PERMISSIONS_METIER_PAR_ROLE = {
         "modifier_article_kit", "desactiver_article_kit",
         "reactiver_article_kit", "supprimer_article_kit",
         "consulter_statistiques_kits",
-        # Catalogue des activités et définition des évaluations.
+        # Catalogue des activités, planification des séances et évaluations.
         "consulter_activites", "creer_activite", "modifier_activite",
-        "desactiver_activite", "consulter_evaluations",
+        "desactiver_activite", "consulter_seances", "planifier_seance",
+        "modifier_seance", "annuler_seance", "reporter_seance",
+        "affecter_formateur_seance", "consulter_evaluations",
         "creer_evaluation", "modifier_evaluation", "annuler_evaluation",
+        # Supervision des demandes d'alimentation des centres.
+        "consulter_demandes_ravitaillement",
+        "valider_demande_ravitaillement", "consolider_besoins_denrees",
         # Supervision, audit et clôture proposée par le système.
         "consulter_statistiques_notifications", "relancer_email_echoue",
         "envoyer_email_test", "consulter_journaux_audit",

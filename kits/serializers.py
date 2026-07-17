@@ -155,6 +155,8 @@ class ArticleKitCreateSerializer(serializers.Serializer):
                     )
                 }
             )
+        if attrs["type_kit"] == ArticleKit.TypeKit.A_REMETTRE:
+            attrs["centre_id"] = None
         return attrs
 
 
