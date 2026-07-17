@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from sessions_app.models import SessionImmersion
@@ -128,6 +129,7 @@ class ActeurViewSet(AccountsViewSetBase):
 
     permission_classes = [EstActeurActif, PermissionActeur]
     serializer_class = ActeurDetailSerializer
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
@@ -303,6 +305,25 @@ class RoleViewSet(AccountsViewSetBase):
             convertir_erreur_service(exception)
         return self.reponse_action("Rôle désactivé avec succès.")
 
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[EstActeurActif],
+        url_path="attribuables",
+    )
+    def attribuables(self, request):
+        affectation_id = request.query_params.get("affectation_acteur_id") or request.query_params.get("affectation")
+        if not affectation_id:
+            raise ValidationError("Affectation obligatoire.")
+
+        try:
+            roles = RoleService.lister_roles_attribuables(request.user, affectation_id)
+        except DjangoValidationError as exception:
+            convertir_erreur_service(exception)
+
+        serializer = RoleSerializer(roles, many=True, context=self.get_serializer_context())
+        return Response(serializer.data)
+
 
 class PermissionViewSet(AccountsReadCreateViewSetBase):
     """API du catalogue système des permissions accounts."""
@@ -386,7 +407,12 @@ class AffectationActeurViewSet(mixins.DestroyModelMixin, AccountsReadCreateViewS
     http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
-        queryset = AffectationActeurRepository.actives()
+        queryset = AffectationActeurRepository.non_supprimes().exclude(
+            statut__in=[
+                AffectationActeur.Statut.TERMINEE,
+                AffectationActeur.Statut.ANNULEE,
+            ]
+        )
 
         acteur_id = self.request.query_params.get("acteur_id") or self.request.query_params.get("acteur")
         if acteur_id:
@@ -476,7 +502,27 @@ class AffectationActeurViewSet(mixins.DestroyModelMixin, AccountsReadCreateViewS
             AffectationActeurService.terminer_affectation(affectation)
         except DjangoValidationError as exception:
             convertir_erreur_service(exception)
-        return self.reponse_action("Affectation d'acteur retirée avec succès.")
+        return self.reponse_action("Affectation retirée avec succès.")
+
+    @action(detail=True, methods=["post"])
+    def suspendre(self, request, pk=None):
+        affectation = self.get_object()
+        try:
+            affectation = AffectationActeurService.suspendre_affectation(affectation)
+        except DjangoValidationError as exception:
+            convertir_erreur_service(exception)
+        serializer = AffectationActeurSerializer(affectation, context=self.get_serializer_context())
+        return self.reponse_action("Affectation suspendue avec succès.", {"affectation": serializer.data})
+
+    @action(detail=True, methods=["post"])
+    def reactiver(self, request, pk=None):
+        affectation = self.get_object()
+        try:
+            affectation = AffectationActeurService.reactiver_affectation(affectation)
+        except DjangoValidationError as exception:
+            convertir_erreur_service(exception)
+        serializer = AffectationActeurSerializer(affectation, context=self.get_serializer_context())
+        return self.reponse_action("Affectation réactivée avec succès.", {"affectation": serializer.data})
 
     @action(detail=True, methods=["post"])
     def retirer(self, request, pk=None):
@@ -485,7 +531,7 @@ class AffectationActeurViewSet(mixins.DestroyModelMixin, AccountsReadCreateViewS
             AffectationActeurService.terminer_affectation(affectation)
         except DjangoValidationError as exception:
             convertir_erreur_service(exception)
-        return self.reponse_action("Affectation d'acteur retirée avec succès.")
+        return self.reponse_action("Affectation retirée avec succès.")
 
 
 class AffectationRoleViewSet(

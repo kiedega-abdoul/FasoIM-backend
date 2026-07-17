@@ -113,7 +113,6 @@ class KitsFixtureMixin:
             nom="Centre kits",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=200,
             genre=CentreImmersion.Genre.MIXTE,
             publics_acceptes=[],
             niveaux_acceptes=[],

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from rest_framework import status, viewsets
@@ -18,6 +21,7 @@ from .permissions import (
     PermissionAffectationRegionale,
     PermissionCentreImmersion,
     PermissionRegionImmersion,
+    extraire_perimetre_affectation,
 )
 from .repository import (
     AffectationCentreRepository,
@@ -86,6 +90,24 @@ def lever_erreur_service(exception):
             {"detail": "Cette opération entre en conflit avec une donnée existante."}
         )
     raise exception
+
+
+def code_automatique(valeur, *, max_length=50):
+    texte = unicodedata.normalize("NFKD", str(valeur or ""))
+    texte = texte.encode("ascii", "ignore").decode("ascii")
+    texte = re.sub(r"[^A-Za-z0-9]+", "_", texte).strip("_").upper()
+    return (texte or "REF")[:max_length].strip("_") or "REF"
+
+
+def code_unique(base, existe_code, *, max_length=50):
+    racine = code_automatique(base, max_length=max_length)
+    code = racine
+    compteur = 2
+    while existe_code(code):
+        suffixe = f"_{compteur}"
+        code = f"{racine[:max_length - len(suffixe)]}{suffixe}"
+        compteur += 1
+    return code
 
 
 class AffectationsViewSetBase(viewsets.GenericViewSet):
@@ -172,9 +194,22 @@ class RegionImmersionViewSet(AffectationsViewSetBase):
         queryset = RegionImmersionRepository.lister()
         statut_filtre = self.request.query_params.get("statut")
         recherche = self.request.query_params.get("recherche") or self.request.query_params.get("q")
+        perimetre = extraire_perimetre_affectation(
+            self.request,
+            self,
+            cible="region",
+        )
 
         if statut_filtre:
             queryset = queryset.filter(statut=statut_filtre)
+
+        region_code = (
+            self.request.query_params.get("region_code")
+            or self.request.query_params.get("code")
+            or perimetre.get("region_code")
+        )
+        if region_code:
+            queryset = queryset.filter(code=str(region_code).strip().upper())
 
         if recherche:
             recherche = str(recherche).strip()
@@ -195,10 +230,32 @@ class RegionImmersionViewSet(AffectationsViewSetBase):
             return RegionImmersionUpdateSerializer
         return RegionImmersionDetailSerializer
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = RegionImmersionResumeSerializer(
+            queryset,
+            many=True,
+            context=self.get_serializer_context(),
+        )
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        region = self.get_object()
+        serializer = RegionImmersionDetailSerializer(
+            region,
+            context=self.get_serializer_context(),
+        )
+        return Response(serializer.data)
+
     def create(self, request, *args, **kwargs):
         serializer = RegionImmersionInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         donnees = dict(serializer.validated_data)
+        if not donnees.get("code"):
+            donnees["code"] = code_unique(
+                donnees["nom"],
+                RegionImmersionRepository.existe_code,
+            )
 
         if RegionImmersionRepository.existe_code(donnees["code"]):
             raise ValidationError(
@@ -288,7 +345,15 @@ class CentreImmersionViewSet(AffectationsViewSetBase):
             data=self.request.query_params,
         )
         filtre.is_valid(raise_exception=True)
-        return CentreImmersionRepository.filtrer(**filtre.validated_data)
+        donnees = dict(filtre.validated_data)
+        perimetre = extraire_perimetre_affectation(
+            self.request,
+            self,
+            cible="centre",
+        )
+        donnees.setdefault("region_code", perimetre.get("region_code"))
+        donnees.setdefault("centre_id", perimetre.get("centre_id"))
+        return CentreImmersionRepository.filtrer(**donnees)
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -298,6 +363,23 @@ class CentreImmersionViewSet(AffectationsViewSetBase):
         if self.action in {"update", "partial_update"}:
             return CentreImmersionUpdateSerializer
         return CentreImmersionDetailSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = CentreImmersionResumeSerializer(
+            queryset,
+            many=True,
+            context=self.get_serializer_context(),
+        )
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        centre = self.get_object()
+        serializer = CentreImmersionDetailSerializer(
+            centre,
+            context=self.get_serializer_context(),
+        )
+        return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
         serializer = CentreImmersionInputSerializer(data=request.data)
@@ -311,6 +393,12 @@ class CentreImmersionViewSet(AffectationsViewSetBase):
             raise ValidationError(
                 {"region_id": "La région demandée est introuvable ou inactive."}
             ) from exception
+
+        if not donnees.get("code"):
+            donnees["code"] = code_unique(
+                f"{region.code}_{donnees['nom']}",
+                CentreImmersionRepository.existe_code,
+            )
 
         if CentreImmersionRepository.existe_code(donnees["code"]):
             raise ValidationError(

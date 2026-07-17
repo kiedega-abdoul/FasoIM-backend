@@ -89,6 +89,8 @@ class ActeurListSerializer(serializers.ModelSerializer):
             "telephone",
             "titre",
             "organisation",
+            "signature_image",
+            "cachet_image",
             "statut",
         ]
         read_only_fields = fields
@@ -109,6 +111,8 @@ class ActeurDetailSerializer(serializers.ModelSerializer):
             "telephone",
             "titre",
             "organisation",
+            "signature_image",
+            "cachet_image",
             "statut",
         ]
         read_only_fields = fields
@@ -170,6 +174,8 @@ class ActeurCreateSerializer(serializers.ModelSerializer):
     telephone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     titre = serializers.CharField(required=False, allow_blank=True)
     organisation = serializers.CharField(required=False, allow_blank=True)
+    signature_image = serializers.ImageField(required=False, allow_null=True)
+    cachet_image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Acteur
@@ -182,6 +188,8 @@ class ActeurCreateSerializer(serializers.ModelSerializer):
             "telephone",
             "titre",
             "organisation",
+            "signature_image",
+            "cachet_image",
             "statut",
         ]
         read_only_fields = ["id", "statut"]
@@ -201,6 +209,8 @@ class ActeurCreateSerializer(serializers.ModelSerializer):
                 telephone=validated_data.get("telephone"),
                 titre=validated_data.get("titre", ""),
                 organisation=validated_data.get("organisation", ""),
+                signature_image=validated_data.get("signature_image"),
+                cachet_image=validated_data.get("cachet_image"),
                 created_by=created_by,
                 envoyer_email_bienvenue=True,
             )
@@ -214,16 +224,22 @@ class ActeurUpdateSerializer(serializers.ModelSerializer):
         fields = [
             "first_name",
             "last_name",
+            "email",
             "telephone",
             "titre",
             "organisation",
+            "signature_image",
+            "cachet_image",
         ]
         extra_kwargs = {
             "first_name": {"required": False},
             "last_name": {"required": False},
+            "email": {"required": False},
             "telephone": {"required": False, "allow_blank": True, "allow_null": True},
             "titre": {"required": False, "allow_blank": True},
             "organisation": {"required": False, "allow_blank": True},
+            "signature_image": {"required": False, "allow_null": True},
+            "cachet_image": {"required": False, "allow_null": True},
         }
 
     def update(self, instance, validated_data):

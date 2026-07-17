@@ -149,7 +149,7 @@ class RegionImmersionInputSerializer(serializers.Serializer):
     service, lequel applique les règles et utilise le repository.
     """
 
-    code = serializers.CharField(max_length=50)
+    code = serializers.CharField(max_length=50, required=False, allow_blank=True)
     nom = serializers.CharField(max_length=150)
     description = serializers.CharField(
         required=False,
@@ -164,8 +164,6 @@ class RegionImmersionInputSerializer(serializers.Serializer):
 
     def validate_code(self, value):
         value = value.strip().upper()
-        if not value:
-            raise serializers.ValidationError("Le code de la région est obligatoire.")
         return value
 
     def validate_nom(self, value):
@@ -176,7 +174,7 @@ class RegionImmersionInputSerializer(serializers.Serializer):
 
 
 class RegionImmersionUpdateSerializer(RegionImmersionInputSerializer):
-    code = serializers.CharField(max_length=50, required=False)
+    code = serializers.CharField(max_length=50, required=False, allow_blank=True)
     nom = serializers.CharField(max_length=150, required=False)
     description = serializers.CharField(required=False, allow_blank=True)
     statut = serializers.ChoiceField(
@@ -241,7 +239,7 @@ class CentreImmersionInputSerializer(serializers.Serializer):
     """
 
     region_id = serializers.IntegerField(min_value=1)
-    code = serializers.CharField(max_length=50)
+    code = serializers.CharField(max_length=50, required=False, allow_blank=True)
     nom = serializers.CharField(max_length=200)
     province = serializers.CharField(max_length=150)
     ville = serializers.CharField(max_length=150)
@@ -277,8 +275,6 @@ class CentreImmersionInputSerializer(serializers.Serializer):
 
     def validate_code(self, value):
         value = value.strip().upper()
-        if not value:
-            raise serializers.ValidationError("Le code du centre est obligatoire.")
         return value
 
     def validate_nom(self, value):
@@ -314,7 +310,7 @@ class CentreImmersionInputSerializer(serializers.Serializer):
 
 class CentreImmersionUpdateSerializer(CentreImmersionInputSerializer):
     region_id = serializers.IntegerField(min_value=1, required=False)
-    code = serializers.CharField(max_length=50, required=False)
+    code = serializers.CharField(max_length=50, required=False, allow_blank=True)
     nom = serializers.CharField(max_length=200, required=False)
     province = serializers.CharField(max_length=150, required=False)
     ville = serializers.CharField(max_length=150, required=False)
@@ -433,6 +429,7 @@ class PropositionRegionaleLotInputSerializer(serializers.Serializer):
 
     session_id = serializers.IntegerField(min_value=1)
     nombre = serializers.IntegerField(min_value=1, max_value=1000)
+    forcer_reliquat = serializers.BooleanField(required=False, default=False)
 
 
 class PropositionCentreLotInputSerializer(serializers.Serializer):
@@ -579,6 +576,12 @@ class ProgressionAffectationSerializer(serializers.Serializer):
 
 class FiltreCentreImmersionSerializer(serializers.Serializer):
     region_id = serializers.IntegerField(required=False, min_value=1)
+    region_code = serializers.CharField(
+        required=False,
+        allow_blank=False,
+        max_length=50,
+    )
+    centre_id = serializers.IntegerField(required=False, min_value=1)
     statut = serializers.ChoiceField(
         choices=CentreImmersion.Statut.choices,
         required=False,

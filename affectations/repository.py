@@ -255,6 +255,8 @@ class CentreImmersionRepository:
     def filtrer(
         *,
         region_id=None,
+        region_code=None,
+        centre_id=None,
         statut=None,
         genre=None,
         type_immerge=None,
@@ -267,6 +269,10 @@ class CentreImmersionRepository:
 
         if region_id is not None:
             queryset = queryset.filter(region_id=region_id)
+        if region_code:
+            queryset = queryset.filter(region__code=str(region_code).strip().upper())
+        if centre_id is not None:
+            queryset = queryset.filter(id=centre_id)
         if statut:
             queryset = queryset.filter(statut=statut)
         if genre:

@@ -13,7 +13,8 @@ from typing import Any
 
 from rest_framework.permissions import BasePermission
 
-from accounts.models import Acteur
+from accounts.access_context import obtenir_affectation_courante_id
+from accounts.models import Acteur, AffectationActeur
 from accounts.service import ControleAccesService
 
 from .models import (
@@ -285,11 +286,57 @@ def extraire_perimetre_affectation(
     if region_code in (None, "") and region_id is not None:
         region_code = region_code_depuis_id(region_id)
 
+    contexte_courant = contexte_depuis_affectation_courante(request)
+    if session_id is None:
+        session_id = contexte_courant.get("session_id") or session_id
+
+    if region_code in (None, "") and centre_id is None:
+        session_id = contexte_courant.get("session_id") or session_id
+        region_code = contexte_courant.get("region_code") or region_code
+        centre_id = contexte_courant.get("centre_id") or centre_id
+
     return {
         "session_id": session_id,
         "region_code": normaliser_texte_ou_none(region_code),
         "centre_id": centre_id,
     }
+
+
+def contexte_depuis_affectation_courante(request=None) -> dict:
+    affectation_id = convertir_entier_ou_none(obtenir_affectation_courante_id())
+    if affectation_id is None:
+        return {}
+
+    queryset = AffectationActeur.objects.filter(
+        id=affectation_id,
+        statut=AffectationActeur.Statut.ACTIVE,
+        deleted_at__isnull=True,
+    )
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        queryset = queryset.filter(acteur_id=user.id)
+
+    affectation = queryset.only(
+        "id",
+        "acteur_id",
+        "session_id",
+        "niveau_affectation",
+        "region_code",
+        "centre_id",
+    ).first()
+    if affectation is None:
+        return {}
+
+    contexte = {}
+    if affectation.session_id:
+        contexte["session_id"] = affectation.session_id
+    if affectation.niveau_affectation == AffectationActeur.NiveauAffectation.REGION:
+        contexte["region_code"] = affectation.region_code
+    if affectation.niveau_affectation == AffectationActeur.NiveauAffectation.CENTRE:
+        contexte["centre_id"] = affectation.centre_id
+        if affectation.region_code:
+            contexte["region_code"] = affectation.region_code
+    return contexte
 
 
 def contexte_depuis_objet(obj) -> dict:

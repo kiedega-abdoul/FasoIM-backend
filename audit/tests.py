@@ -86,7 +86,6 @@ class AuditBaseTest(TestCase):
             nom="Centre audit",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=100,
         )
         self.immerge = Immerge.objects.create(
             session=self.session,
@@ -349,7 +348,6 @@ class JournalActionAPITests(AuditBaseTest):
             nom="Autre centre audit",
             province="Houet",
             ville="Bobo-Dioulasso",
-            capacite_totale=100,
         )
         acteur_region = self.creer_acteur_autorise(
             "dr-audit",

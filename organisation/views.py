@@ -31,6 +31,7 @@ from .permissions import (
 from .repository import (
     AffectationGroupeRepository,
     AttributionLitRepository,
+    CandidatsOrganisationRepository,
     DortoirRepository,
     GroupeRepository,
     LitRepository,
@@ -289,6 +290,120 @@ class RegleOrganisationCentreViewSet(OrganisationViewSetBase):
         ) as exception:
             lever_erreur_service(exception)
         return Response(RegleOrganisationCentreSerializer(regle).data)
+
+    @action(detail=True, methods=["get"], url_path="synthese")
+    def synthese(self, request, pk=None):
+        regle = self.get_object()
+        session_id = regle.session_id
+        centre_id = regle.centre_id
+
+        total_affectations = (
+            CandidatsOrganisationRepository.compter_affectations_centre_actives(
+                session_id=session_id,
+                centre_id=centre_id,
+            )
+        )
+        sections = SectionRepository.lister_par_session_centre(
+            session_id,
+            centre_id,
+        ).count()
+        groupes = GroupeRepository.lister_par_session_centre(
+            session_id,
+            centre_id,
+        ).count()
+        candidats_groupes = CandidatsOrganisationRepository.compter_candidats_groupes(
+            session_id=session_id,
+            centre_id=centre_id,
+        )
+        affectations_groupes_actives = (
+            AffectationGroupeRepository.lister_actives()
+            .filter(
+                affectation_centre__session_id=session_id,
+                affectation_centre__centre_id=centre_id,
+            )
+            .count()
+        )
+        propositions_groupes = (
+            AffectationGroupeRepository.lister_proposees()
+            .filter(
+                affectation_centre__session_id=session_id,
+                affectation_centre__centre_id=centre_id,
+            )
+            .count()
+        )
+
+        lits_utilisables = LitRepository.compter_exploitables_par_centre(centre_id)
+        candidats_lits = (
+            CandidatsOrganisationRepository.compter_candidats_lits(
+                session_id=session_id,
+                centre_id=centre_id,
+            )
+            if regle.hebergement_active
+            else 0
+        )
+        attributions_lits_actives = (
+            AttributionLitRepository.lister_actives()
+            .filter(
+                affectation_centre__session_id=session_id,
+                affectation_centre__centre_id=centre_id,
+            )
+            .count()
+            if regle.hebergement_active
+            else 0
+        )
+        propositions_lits = (
+            AttributionLitRepository.lister_proposees()
+            .filter(
+                affectation_centre__session_id=session_id,
+                affectation_centre__centre_id=centre_id,
+            )
+            .count()
+            if regle.hebergement_active
+            else 0
+        )
+
+        structures_generees = sections > 0 and groupes > 0
+        groupes_complets = (
+            total_affectations > 0
+            and affectations_groupes_actives == total_affectations
+            and propositions_groupes == 0
+            and candidats_groupes == 0
+        )
+        lits_complets = (
+            not regle.hebergement_active
+            or (
+                attributions_lits_actives == total_affectations
+                and propositions_lits == 0
+                and candidats_lits == 0
+            )
+        )
+
+        return Response(
+            {
+                "total_affectations_centre": total_affectations,
+                "sections": sections,
+                "groupes": groupes,
+                "candidats_groupes": candidats_groupes,
+                "affectations_groupes_actives": affectations_groupes_actives,
+                "propositions_groupes": propositions_groupes,
+                "hebergement_active": regle.hebergement_active,
+                "lits_utilisables": lits_utilisables,
+                "candidats_lits": candidats_lits,
+                "attributions_lits_actives": attributions_lits_actives,
+                "propositions_lits": propositions_lits,
+                "actions": {
+                    "peut_generer_structures": (
+                        regle.repartition_sections_groupes_automatique
+                        and total_affectations > 0
+                        and not structures_generees
+                    ),
+                    "peut_valider_organisation": (
+                        structures_generees and groupes_complets and lits_complets
+                    ),
+                    "peut_marquer_pret": regle.est_validee,
+                },
+            }
+        )
 
     @action(
         detail=False,
@@ -639,6 +754,17 @@ class DortoirViewSet(OrganisationViewSetBase):
         except DjangoValidationError as exception:
             lever_erreur_service(exception)
         return Response(DortoirSerializer(dortoir).data)
+
+    @action(detail=True, methods=["post"], url_path="generer-lits")
+    def generer_lits(self, request, pk=None):
+        dortoir = self.get_object()
+        try:
+            resultat = HebergementService.generer_lits_dortoir(
+                dortoir_id=dortoir.id,
+            )
+        except (DjangoValidationError, ValidationOrganisationErreur, IntegrityError) as exception:
+            lever_erreur_service(exception)
+        return Response(resultat.en_dict(), status=status.HTTP_201_CREATED)
 
 
 class LitViewSet(OrganisationViewSetBase):

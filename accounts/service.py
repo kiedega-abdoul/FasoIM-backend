@@ -142,6 +142,8 @@ class ActeurService(ServiceBase):
         telephone=None,
         titre="",
         organisation="",
+        signature_image=None,
+        cachet_image=None,
         created_by=None,
         is_staff=False,
         is_superuser=False,
@@ -174,6 +176,8 @@ class ActeurService(ServiceBase):
             telephone=telephone,
             titre=ActeurService.normaliser_texte(titre),
             organisation=ActeurService.normaliser_texte(organisation),
+            signature_image=signature_image,
+            cachet_image=cachet_image,
             statut=Acteur.Statut.ACTIF,
             is_active=True,
             is_staff=is_staff,
@@ -194,7 +198,18 @@ class ActeurService(ServiceBase):
 
     @staticmethod
     @transaction.atomic
-    def modifier_profil(acteur, *, first_name=None, last_name=None, telephone=None, titre=None, organisation=None):
+    def modifier_profil(
+        acteur,
+        *,
+        first_name=None,
+        last_name=None,
+        email=None,
+        telephone=None,
+        titre=None,
+        organisation=None,
+        signature_image=None,
+        cachet_image=None,
+    ):
         acteur = ActeurRepository.get_actif_by_id(ActeurService.identifiant(acteur))
         if not acteur:
             raise ValidationError("Acteur introuvable ou inactif.")
@@ -203,6 +218,13 @@ class ActeurService(ServiceBase):
             acteur.first_name = ActeurService.normaliser_texte(first_name)
         if last_name is not None:
             acteur.last_name = ActeurService.normaliser_texte(last_name)
+        if email is not None:
+            email = ActeurService.normaliser_texte(email).lower()
+            if not email:
+                raise ValidationError({"email": "L'email est obligatoire."})
+            if ActeurRepository.email_existe(email, exclude_id=acteur.id):
+                raise ValidationError({"email": "Cet email est déjà utilisé."})
+            acteur.email = email
         if telephone is not None:
             telephone = ActeurService.normaliser_texte(telephone) or None
             if telephone and ActeurRepository.telephone_existe(telephone, exclude_id=acteur.id):
@@ -212,6 +234,10 @@ class ActeurService(ServiceBase):
             acteur.titre = ActeurService.normaliser_texte(titre)
         if organisation is not None:
             acteur.organisation = ActeurService.normaliser_texte(organisation)
+        if signature_image is not None:
+            acteur.signature_image = signature_image
+        if cachet_image is not None:
+            acteur.cachet_image = cachet_image
 
         acteur.full_clean()
         acteur.save()
@@ -328,6 +354,13 @@ class ActeurService(ServiceBase):
 class RoleService(ServiceBase):
     """Gestion métier des rôles."""
 
+    RANGS_PERIMETRES = {
+        Role.Perimetre.CENTRE: 1,
+        Role.Perimetre.REGION: 2,
+        Role.Perimetre.NATIONAL: 3,
+        Role.Perimetre.PLATEFORME: 4,
+    }
+
     @staticmethod
     @transaction.atomic
     def creer_role_systeme(*, code, libelle, niveau, perimetre_autorise, description="", est_modifiable=False):
@@ -391,6 +424,81 @@ class RoleService(ServiceBase):
         role.statut = Role.Statut.INACTIF
         role.save(update_fields=["statut", "updated_at"])
         return role
+
+    @staticmethod
+    def lister_roles_attribuables(acteur, affectation_cible):
+        """Liste les rôles que l'acteur courant peut ajouter à l'affectation cible."""
+
+        acteur = ActeurRepository.get_actif_by_id(RoleService.identifiant(acteur))
+        affectation_cible = AffectationActeurRepository.non_supprimes().filter(
+            id=RoleService.identifiant(affectation_cible)
+        ).exclude(
+            statut__in=[
+                AffectationActeur.Statut.TERMINEE,
+                AffectationActeur.Statut.ANNULEE,
+            ]
+        ).first()
+        if not acteur:
+            raise ValidationError("Acteur introuvable ou inactif.")
+        if not affectation_cible:
+            raise ValidationError("Affectation introuvable.")
+        if affectation_cible.statut != AffectationActeur.Statut.ACTIVE:
+            return RoleRepository.actifs().none()
+
+        if getattr(acteur, "is_superuser", False):
+            niveau_minimum = 0
+        else:
+            affectation_source_id = obtenir_affectation_courante_id()
+            affectation_source = None
+            if affectation_source_id not in (None, -1):
+                affectation_source = AffectationActeurRepository.get_active_by_id(affectation_source_id)
+            if affectation_source is None or affectation_source.acteur_id != acteur.id:
+                raise ValidationError(
+                    "Choisissez votre contexte de travail avant d'ajouter un rôle."
+                )
+
+            resultat = ControleAccesService.acteur_peut(
+                acteur,
+                "attribuer_role",
+                affectation=affectation_source,
+                session_id=affectation_cible.session_id,
+                region_code=affectation_cible.region_code or None,
+                centre_id=affectation_cible.centre_id,
+            )
+            if not resultat.autorise:
+                raise ValidationError("Vous ne pouvez pas ajouter un rôle sur cette affectation.")
+
+            niveaux_source = list(
+                AffectationRole.objects.filter(
+                    affectation_acteur=affectation_source,
+                    statut=AffectationRole.Statut.ACTIF,
+                    deleted_at__isnull=True,
+                ).values_list("role__niveau", flat=True)
+            )
+            if not niveaux_source:
+                return RoleRepository.actifs().none()
+            niveau_minimum = min(niveaux_source)
+
+        rang_affectation = RoleService.RANGS_PERIMETRES.get(affectation_cible.niveau_affectation, 0)
+        roles_attribues = AffectationRole.objects.filter(
+            affectation_acteur=affectation_cible,
+            statut=AffectationRole.Statut.ACTIF,
+            deleted_at__isnull=True,
+        ).values("role_id")
+
+        return (
+            RoleRepository.actifs()
+            .filter(niveau__gte=niveau_minimum)
+            .exclude(id__in=roles_attribues)
+            .filter(
+                perimetre_autorise__in=[
+                    perimetre
+                    for perimetre, rang in RoleService.RANGS_PERIMETRES.items()
+                    if rang <= rang_affectation
+                ]
+            )
+            .order_by("niveau", "code")
+        )
 
 
 class PermissionService(ServiceBase):
@@ -528,6 +636,42 @@ class AffectationActeurService(ServiceBase):
 
     @staticmethod
     @transaction.atomic
+    def suspendre_affectation(affectation):
+        affectation = AffectationActeur.objects.select_for_update().filter(
+            id=AffectationActeurService.identifiant(affectation),
+            deleted_at__isnull=True,
+        ).first()
+        if not affectation:
+            raise ValidationError("Affectation introuvable.")
+        if affectation.statut != AffectationActeur.Statut.ACTIVE:
+            raise ValidationError("Seule une affectation active peut être suspendue.")
+
+        affectation.statut = AffectationActeur.Statut.SUSPENDUE
+        affectation.save(update_fields=["statut", "updated_at"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(affectation.acteur_id)
+        return affectation
+
+    @staticmethod
+    @transaction.atomic
+    def reactiver_affectation(affectation):
+        affectation = AffectationActeur.objects.select_for_update().filter(
+            id=AffectationActeurService.identifiant(affectation),
+            deleted_at__isnull=True,
+        ).first()
+        if not affectation:
+            raise ValidationError("Affectation introuvable.")
+        if affectation.statut != AffectationActeur.Statut.SUSPENDUE:
+            raise ValidationError("Seule une affectation suspendue peut être réactivée.")
+
+        affectation.statut = AffectationActeur.Statut.ACTIVE
+        affectation.save(update_fields=["statut", "updated_at"])
+
+        ServiceAsynchroneAccounts.recalculer_cache_permissions_apres_commit(affectation.acteur_id)
+        return affectation
+
+    @staticmethod
+    @transaction.atomic
     def terminer_affectation(affectation):
         affectation = AffectationActeur.objects.select_for_update().filter(
             id=AffectationActeurService.identifiant(affectation),
@@ -604,9 +748,9 @@ class AffectationRoleService(ServiceBase):
                     deleted_at__isnull=True,
                 ).values_list("role__niveau", flat=True)
             )
-            if not niveaux_source or role.niveau <= min(niveaux_source):
+            if not niveaux_source or role.niveau < min(niveaux_source):
                 raise ValidationError(
-                    "Vous ne pouvez attribuer qu'un rôle inférieur à votre propre niveau hiérarchique."
+                    "Vous ne pouvez ajouter qu'un rôle de niveau égal ou inférieur au vôtre."
                 )
 
         attribution = AffectationRole(
@@ -1029,6 +1173,164 @@ class ControleAccesService(ServiceBase):
                 "annuler_demande_permission",
             },
             {"consulter_demande_permission"},
+        ),
+        # Affectations territoriales : régions, centres et parcours d'affectation.
+        # Ces accès sont calculés uniquement dans les permissions effectives.
+        # Aucune association supplémentaire n'est créée en base.
+        (
+            {
+                "creer_region",
+                "modifier_region",
+                "desactiver_region",
+                "consulter_region",
+            },
+            {"lister_regions"},
+        ),
+        (
+            {
+                "modifier_region",
+                "desactiver_region",
+            },
+            {"consulter_region"},
+        ),
+        (
+            {
+                "creer_centre",
+                "modifier_centre",
+                "desactiver_centre",
+                "mettre_centre_maintenance",
+                "reactiver_centre",
+                "verifier_capacite_centre",
+                "consulter_centre",
+            },
+            {"lister_centres"},
+        ),
+        (
+            {
+                "modifier_centre",
+                "desactiver_centre",
+                "mettre_centre_maintenance",
+                "reactiver_centre",
+                "verifier_capacite_centre",
+            },
+            {"consulter_centre"},
+        ),
+        (
+            {
+                "proposer_affectation_regionale",
+                "affecter_region",
+                "modifier_affectation_regionale",
+                "valider_affectation_regionale",
+                "annuler_affectation_regionale",
+            },
+            {
+                "consulter_affectations_regionales",
+                "lister_regions",
+            },
+        ),
+        (
+            {
+                "proposer_affectation_centre",
+                "affecter_centre",
+                "modifier_affectation_centre",
+                "valider_affectation_centre",
+                "annuler_affectation_centre",
+                "verifier_compatibilite_centre",
+            },
+            {
+                "consulter_affectations_centres",
+                "consulter_affectations_regionales",
+                "lister_centres",
+            },
+        ),
+        # Organisation interne : règles, sections, groupes et hébergement.
+        (
+            {
+                "configurer_regles_centre",
+                "modifier_regles_centre",
+                "generer_sections_groupes",
+                "valider_organisation_interne",
+                "marquer_centre_pret_publication",
+                "creer_section",
+                "modifier_section",
+                "supprimer_section",
+                "creer_groupe",
+                "modifier_groupe",
+                "supprimer_groupe",
+                "affecter_immerge_groupe",
+                "retirer_immerge_groupe",
+            },
+            {
+                "consulter_regles_centre",
+                "lister_centres",
+            },
+        ),
+        (
+            {
+                "affecter_immerge_groupe",
+                "retirer_immerge_groupe",
+            },
+            {"consulter_affectations_centres"},
+        ),
+        (
+            {
+                "creer_dortoir",
+                "modifier_dortoir",
+                "desactiver_dortoir",
+                "mettre_dortoir_hors_service",
+                "creer_lit",
+                "modifier_lit",
+                "mettre_lit_hors_service",
+                "reactiver_lit",
+                "proposer_attribution_lit",
+                "attribuer_lit",
+                "modifier_attribution_lit",
+                "liberer_lit",
+            },
+            {
+                "consulter_hebergement",
+                "lister_centres",
+            },
+        ),
+        (
+            {
+                "proposer_attribution_lit",
+                "attribuer_lit",
+                "modifier_attribution_lit",
+                "liberer_lit",
+            },
+            {"consulter_affectations_centres"},
+        ),
+        # Kits : les actions ouvrent aussi les écrans qui les portent.
+        (
+            {
+                "creer_article_kit_a_remettre",
+                "creer_article_kit_a_apporter",
+                "modifier_article_kit",
+                "desactiver_article_kit",
+                "reactiver_article_kit",
+                "supprimer_article_kit",
+            },
+            {"consulter_articles_kit"},
+        ),
+        (
+            {
+                "enregistrer_remise_kit",
+                "annuler_remise_kit",
+                "consulter_statistiques_kits",
+                "preparer_remises_kit_masse",
+                "valider_remises_kit_masse",
+                "annuler_remises_kit_masse",
+            },
+            {"consulter_remises_kit"},
+        ),
+        (
+            {
+                "preparer_remises_kit_masse",
+                "valider_remises_kit_masse",
+                "annuler_remises_kit_masse",
+            },
+            {"consulter_progression_kits"},
         ),
         # Inscriptions volontaires : toute action interne ouvre la liste.
         (

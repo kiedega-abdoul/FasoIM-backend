@@ -223,6 +223,8 @@ class FiltreArticleKitSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
+        if "obligatoire" not in self.initial_data:
+            attrs.pop("obligatoire", None)
         if not attrs.get("session_id") and not attrs.get("centre_id"):
             raise serializers.ValidationError(
                 "La session ou le centre est obligatoire."

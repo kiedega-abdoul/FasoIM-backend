@@ -827,6 +827,59 @@ class HebergementService:
         return None
 
     @staticmethod
+    @transaction.atomic
+    def generer_lits_dortoir(*, dortoir_id: int) -> ResultatOperationOrganisation:
+        dortoir = DortoirRepository.get_by_id_pour_update(dortoir_id)
+        if not dortoir.est_actif:
+            raise ValidationOrganisationErreur(
+                "Le dortoir doit être actif pour créer ses lits."
+            )
+
+        lits_existants = list(
+            Lit.objects.select_for_update(of=("self",)).filter(
+                dortoir_id=dortoir.id,
+                deleted_at__isnull=True,
+            ).order_by("id")
+        )
+        total_existants = len(lits_existants)
+        manquants = max(0, int(dortoir.capacite) - total_existants)
+        if manquants == 0:
+            return ResultatOperationOrganisation(
+                demandes=int(dortoir.capacite),
+                traites=total_existants,
+                crees=0,
+                restants=0,
+                details={"message": "Tous les lits du dortoir existent déjà."},
+            )
+
+        numeros_existants = {str(lit.numero_lit) for lit in lits_existants}
+        lits = []
+        numero = 1
+        while len(lits) < manquants:
+            numero_lit = str(numero).zfill(2)
+            numero += 1
+            if numero_lit in numeros_existants:
+                continue
+            lit = Lit(
+                dortoir=dortoir,
+                numero_lit=numero_lit,
+                statut=Lit.Statut.DISPONIBLE,
+            )
+            lit.full_clean()
+            lits.append(lit)
+            numeros_existants.add(numero_lit)
+
+        lits_crees = LitRepository.creer_en_lot(lits)
+        return ResultatOperationOrganisation(
+            demandes=int(dortoir.capacite),
+            traites=total_existants + len(lits_crees),
+            crees=len(lits_crees),
+            restants=max(0, int(dortoir.capacite) - total_existants - len(lits_crees)),
+            ids_crees=[lit.id for lit in lits_crees],
+            details={"dortoir_id": dortoir.id},
+        )
+
+    @staticmethod
     def _choisir_lit(
         lits: list[dict],
         *,

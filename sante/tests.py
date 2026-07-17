@@ -85,7 +85,6 @@ class SanteFixtureMixin:
             nom="Centre santé",
             province="Kadiogo",
             ville="Ouagadougou",
-            capacite_totale=200,
             genre=CentreImmersion.Genre.MIXTE,
             publics_acceptes=[],
             niveaux_acceptes=[],

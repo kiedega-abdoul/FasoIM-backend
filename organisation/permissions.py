@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from rest_framework.permissions import BasePermission
 
+from accounts.access_context import obtenir_affectation_courante_id
 from accounts.models import Acteur
+from accounts.models import AffectationActeur
 from accounts.service import ControleAccesService
 
 from .models import (
@@ -125,6 +127,7 @@ class PermissionRegleOrganisation(PermissionOrganisationBase):
         "generer_structures": "generer_sections_groupes",
         "valider_organisation": "valider_organisation_interne",
         "marquer_prete_publication": "marquer_centre_pret_publication",
+        "synthese": "consulter_regles_centre",
         "progression": "consulter_regles_centre",
     }
 
@@ -180,6 +183,7 @@ class PermissionDortoir(PermissionOrganisationBase):
         "destroy": "desactiver_dortoir",
         "mettre_hors_service": "mettre_dortoir_hors_service",
         "reactiver": "modifier_dortoir",
+        "generer_lits": "creer_lit",
     }
 
 
@@ -271,7 +275,7 @@ def contexte_pk(cible, pk):
         return None, None
 
     objet = modele.objects.filter(pk=pk, deleted_at__isnull=True).first()
-    return contexte_objet(obj) if objet else (None, None)
+    return contexte_objet(objet) if objet else (None, None)
 
 
 def contexte_relation(data):
@@ -325,6 +329,38 @@ def contexte_relation(data):
             return None, lit.dortoir.centre_id
 
     return None, None
+
+
+def contexte_affectation_courante(request=None):
+    affectation_id = _entier_ou_none(obtenir_affectation_courante_id())
+    if affectation_id is None:
+        return None, None
+
+    queryset = AffectationActeur.objects.filter(
+        id=affectation_id,
+        statut=AffectationActeur.Statut.ACTIVE,
+        deleted_at__isnull=True,
+    )
+    acteur = getattr(request, "user", None)
+    if acteur is not None and getattr(acteur, "is_authenticated", False):
+        queryset = queryset.filter(acteur_id=acteur.id)
+
+    affectation = queryset.only(
+        "id",
+        "acteur_id",
+        "session_id",
+        "niveau_affectation",
+        "centre_id",
+    ).first()
+    if affectation is None:
+        return None, None
+
+    centre_id = (
+        affectation.centre_id
+        if affectation.niveau_affectation == AffectationActeur.NiveauAffectation.CENTRE
+        else None
+    )
+    return affectation.session_id, centre_id
 
 
 def extraire_perimetre_organisation(
@@ -392,6 +428,21 @@ def extraire_perimetre_organisation(
         ).only("code").first()
         if region:
             region_code = region.code
+
+    session_courante, centre_courant = contexte_affectation_courante(request)
+    if session_id is None:
+        session_id = session_courante
+    if centre_id is None and region_code is None:
+        centre_id = centre_courant
+        if centre_id:
+            from affectations.models import CentreImmersion
+
+            centre = CentreImmersion.objects.select_related("region").filter(
+                id=centre_id,
+                deleted_at__isnull=True,
+            ).first()
+            if centre:
+                region_code = centre.region.code
 
     return {
         "session_id": session_id,
