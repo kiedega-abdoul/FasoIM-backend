@@ -127,6 +127,16 @@ class PermissionAccountsBase(BasePermission):
 
         return action
 
+    def autoriser_creation_collaborateur(self, request, view):
+        action = self.get_action(request, view)
+        if action != "create":
+            return False
+        from .access_context import obtenir_affectation_courante_id
+        from .repository import AffectationActeurRepository
+        affectation_id = obtenir_affectation_courante_id()
+        affectation = None if affectation_id in (None, -1) else AffectationActeurRepository.get_active_by_id(affectation_id)
+        return bool(affectation and affectation.acteur_id == request.user.id)
+
     def get_code_permission(self, request, view):
         action = self.get_action(request, view)
 
@@ -184,6 +194,12 @@ class PermissionActeur(PermissionAccountsBase):
     }
 
 
+    def has_permission(self, request, view):
+        if self._acteur_est_valide(getattr(request, "user", None)) and self.autoriser_creation_collaborateur(request, view):
+            return True
+        return super().has_permission(request, view)
+
+
 class PermissionRole(PermissionAccountsBase):
     """Contrôle les actions API sur la table roles."""
 
@@ -196,6 +212,12 @@ class PermissionRole(PermissionAccountsBase):
         "destroy": "desactiver_role",
         "desactiver": "desactiver_role",
     }
+
+
+    def has_permission(self, request, view):
+        if self._acteur_est_valide(getattr(request, "user", None)) and self.autoriser_creation_collaborateur(request, view):
+            return True
+        return super().has_permission(request, view)
 
 
 class PermissionPermissionSysteme(PermissionAccountsBase):
@@ -229,6 +251,12 @@ class PermissionRolePermission(PermissionAccountsBase):
     }
 
 
+    def has_permission(self, request, view):
+        if self._acteur_est_valide(getattr(request, "user", None)) and self.autoriser_creation_collaborateur(request, view):
+            return True
+        return super().has_permission(request, view)
+
+
 class PermissionAffectationActeur(PermissionAccountsBase):
     """Contrôle les actions API sur affectations_acteurs."""
 
@@ -246,6 +274,12 @@ class PermissionAffectationActeur(PermissionAccountsBase):
     }
 
 
+    def has_permission(self, request, view):
+        if self._acteur_est_valide(getattr(request, "user", None)) and self.autoriser_creation_collaborateur(request, view):
+            return True
+        return super().has_permission(request, view)
+
+
 class PermissionAffectationRole(PermissionAccountsBase):
     """Contrôle les actions API sur affectation_roles."""
 
@@ -256,6 +290,12 @@ class PermissionAffectationRole(PermissionAccountsBase):
         "destroy": "retirer_role",
         "retirer": "retirer_role",
     }
+
+
+    def has_permission(self, request, view):
+        if self._acteur_est_valide(getattr(request, "user", None)) and self.autoriser_creation_collaborateur(request, view):
+            return True
+        return super().has_permission(request, view)
 
 
 class PermissionAffectationPermission(PermissionAccountsBase):

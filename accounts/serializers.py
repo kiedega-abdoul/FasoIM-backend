@@ -321,6 +321,7 @@ class RoleCreateSerializer(serializers.ModelSerializer):
                 niveau=validated_data["niveau"],
                 perimetre_autorise=validated_data["perimetre_autorise"],
                 description=validated_data.get("description", ""),
+                cree_par=self.context.get("request").user if self.context.get("request") else None,
             )
         except DjangoValidationError as exception:
             _convertir_erreur_django(exception)
@@ -398,6 +399,7 @@ class RolePermissionSerializer(serializers.ModelSerializer):
                 validated_data["permission"],
                 est_delegable=validated_data.get("est_delegable", False),
                 perimetre_delegation_max=validated_data.get("perimetre_delegation_max", ""),
+                attribue_par=self.context.get("request").user if self.context.get("request") else None,
             )
         except DjangoValidationError as exception:
             _convertir_erreur_django(exception)
@@ -494,7 +496,7 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
                 centre_id=validated_data.get("centre_id"),
                 date_debut=validated_data.get("date_debut"),
                 date_fin=validated_data.get("date_fin"),
-                affecte_par=validated_data.get("affecte_par"),
+                affecte_par=getattr(self.context.get("request"), "user", None),
             )
         except DjangoValidationError as exception:
             _convertir_erreur_django(exception)
@@ -537,7 +539,7 @@ class AffectationRoleSerializer(serializers.ModelSerializer):
             return AffectationRoleService.attribuer_role(
                 validated_data["affectation_acteur"],
                 validated_data["role"],
-                attribue_par=validated_data.get("attribue_par"),
+                attribue_par=getattr(self.context.get("request"), "user", None),
                 date_attribution=validated_data.get("date_attribution"),
                 date_expiration=validated_data.get("date_expiration"),
             )

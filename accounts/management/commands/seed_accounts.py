@@ -439,6 +439,13 @@ ROLES_SYSTEME = [
         Role.Perimetre.CENTRE,
         "Gère les visites médicales lorsque le module santé est activé.",
     ),
+    RoleDefinition(
+        "GESTIONNAIRE_ALIMENTATION",
+        "Gestionnaire de l’alimentation",
+        40,
+        Role.Perimetre.CENTRE,
+        "Gère le ravitaillement, les repas et leur distribution dans son centre.",
+    ),
 ]
 
 
@@ -607,6 +614,206 @@ PERMISSIONS_DOCUMENTS_PAR_ROLE = {
 }
 
 
+# Droits métier fixes de la V1.
+#
+# Les permissions restent des codes techniques utilisés par les vues et les
+# services. Elles ne sont plus choisies une à une par les utilisateurs : la
+# commande rattache automatiquement le bon ensemble au rôle système.
+PERMISSIONS_COMMUNES_ROLE = {
+    "se_connecter",
+    "se_deconnecter",
+    "choisir_contexte",
+    "changer_mot_de_passe",
+    "consulter_profil",
+    "modifier_profil",
+    "signaler_incident",
+    "consulter_incidents",
+}
+
+
+PERMISSIONS_METIER_PAR_ROLE = {
+    "ADMINISTRATEUR": {
+        # Acteurs, rôles fixes et affectations.
+        "creer_acteur", "modifier_acteur", "desactiver_acteur",
+        "reactiver_acteur", "consulter_acteur", "lister_acteurs",
+        "lister_affectations_acteurs", "consulter_affectation_acteur",
+        "affecter_acteur_session", "retirer_affectation_acteur",
+        "suspendre_affectation_acteur", "reactiver_affectation_acteur",
+        "consulter_role", "lister_roles", "attribuer_role", "retirer_role",
+        # Sessions et paramètres.
+        "creer_session", "modifier_session", "cloturer_session",
+        "archiver_session", "consulter_session", "lister_sessions",
+        "configurer_parametres_session", "modifier_parametres_session",
+        "consulter_historique_sessions",
+        "consulter_historique_parametres_session",
+        # Référentiels permanents.
+        "creer_region", "modifier_region", "desactiver_region",
+        "consulter_region", "lister_regions",
+        "creer_centre", "modifier_centre", "desactiver_centre",
+        "mettre_centre_maintenance", "reactiver_centre",
+        "consulter_centre", "lister_centres", "verifier_capacite_centre",
+        # Catalogue national des kits.
+        "consulter_articles_kit", "creer_article_kit_a_remettre",
+        "modifier_article_kit", "desactiver_article_kit",
+        "reactiver_article_kit", "supprimer_article_kit",
+        "consulter_statistiques_kits",
+        # Catalogue des activités et définition des évaluations.
+        "consulter_activites", "creer_activite", "modifier_activite",
+        "desactiver_activite", "consulter_evaluations",
+        "creer_evaluation", "modifier_evaluation", "annuler_evaluation",
+        # Supervision, audit et clôture proposée par le système.
+        "consulter_statistiques_notifications", "relancer_email_echoue",
+        "envoyer_email_test", "consulter_journaux_audit",
+        "consulter_statistiques_audit", "consulter_audit_securite",
+        "consulter_audit_acces_publics", "exporter_journaux_audit",
+        "consulter_activite_acteur", "consulter_activite_immerge",
+        "verifier_cloture_session", "consulter_resultats_finaux",
+        "consulter_documents", "telecharger_document",
+        # Incidents techniques ou escaladés au niveau plateforme.
+        "modifier_incident", "prendre_en_charge_incident",
+        "mettre_incident_en_attente", "resoudre_incident",
+        "cloturer_incident", "annuler_incident", "escalader_incident",
+        "generer_alerte_automatique",
+    },
+    "DGAS": {
+        # Entrée des immergés.
+        "creer_import_officiel", "lister_imports_officiels",
+        "consulter_import_officiel", "modifier_import_officiel",
+        "supprimer_import_officiel", "consulter_champs_attendus_import",
+        "relancer_lecture_import", "valider_correspondance_import",
+        "valider_lignes_import", "confirmer_import_officiel",
+        "annuler_import_officiel", "consulter_progression_import",
+        "consulter_correspondances_import", "consulter_lignes_import",
+        "corriger_ligne_import", "ignorer_ligne_import",
+        "consulter_erreurs_import",
+        "lister_sources_immerges", "consulter_source_immerge",
+        "creer_source_immerge", "modifier_source_immerge",
+        "supprimer_source_immerge", "centraliser_source_immerge",
+        "centraliser_sources_importees", "lister_inscriptions_volontaires",
+        "consulter_inscription_volontaire", "modifier_inscription_volontaire",
+        "accepter_inscription_volontaire", "refuser_inscription_volontaire",
+        "annuler_inscription_volontaire", "supprimer_inscription_volontaire",
+        "accepter_inscriptions_volontaires_lot",
+        "centraliser_volontaires_acceptes", "lister_immerges",
+        "consulter_immerge", "centraliser_immerge", "modifier_immerge",
+        "changer_statut_immerge", "changer_statut_immerges_lot",
+        "generer_code_immerge", "generer_codes_immerges",
+        "regenerer_qr_immerges", "consulter_progression_immerges",
+        "consulter_statistiques_immerges", "confirmer_import_vers_immerges",
+        # Affectation nationale vers les régions.
+        "consulter_region", "lister_regions", "consulter_centre",
+        "lister_centres", "proposer_affectation_regionale",
+        "affecter_region", "modifier_affectation_regionale",
+        "annuler_affectation_regionale", "valider_affectation_regionale",
+        "consulter_affectations_regionales",
+        "consulter_affectations_centres",
+        # Pilotage et incidents nationaux.
+        "consulter_session", "lister_sessions", "consulter_resultats_finaux",
+        "consulter_documents", "telecharger_document",
+        "modifier_incident", "prendre_en_charge_incident",
+        "mettre_incident_en_attente", "resoudre_incident",
+        "cloturer_incident", "annuler_incident", "escalader_incident",
+        "consulter_statistiques_notifications",
+    },
+    "DIRECTEUR_REGIONAL": {
+        # Affectation dans les centres de sa région.
+        "consulter_session", "lister_sessions", "consulter_region",
+        "lister_regions", "consulter_centre", "lister_centres",
+        "verifier_capacite_centre", "consulter_immerge", "lister_immerges",
+        "consulter_affectations_regionales", "proposer_affectation_centre",
+        "affecter_centre", "modifier_affectation_centre",
+        "annuler_affectation_centre", "valider_affectation_centre",
+        "verifier_compatibilite_centre", "consulter_affectations_centres",
+        # Vérification statistique des attestations automatiques.
+        "consulter_resultats_finaux", "consulter_documents",
+        "telecharger_document", "generer_rapports",
+        # Traitement et escalade des incidents régionaux.
+        "modifier_incident", "prendre_en_charge_incident",
+        "mettre_incident_en_attente", "resoudre_incident",
+        "cloturer_incident", "annuler_incident", "escalader_incident",
+    },
+    "RESPONSABLE_CENTRE": {
+        # Règles, organisation et hébergement du centre.
+        "consulter_session", "lister_sessions", "consulter_centre",
+        "consulter_immerge", "lister_immerges",
+        "consulter_affectations_centres", "configurer_regles_centre",
+        "modifier_regles_centre", "consulter_regles_centre",
+        "generer_sections_groupes", "valider_organisation_interne",
+        "marquer_centre_pret_publication", "creer_section",
+        "modifier_section", "supprimer_section", "creer_groupe",
+        "modifier_groupe", "supprimer_groupe", "affecter_immerge_groupe",
+        "retirer_immerge_groupe", "creer_dortoir", "modifier_dortoir",
+        "desactiver_dortoir", "mettre_dortoir_hors_service", "creer_lit",
+        "modifier_lit", "mettre_lit_hors_service", "reactiver_lit",
+        "proposer_attribution_lit", "attribuer_lit",
+        "modifier_attribution_lit", "liberer_lit", "consulter_hebergement",
+        # Kits à apporter et remises effectives.
+        "consulter_articles_kit", "creer_article_kit_a_apporter",
+        "modifier_article_kit", "desactiver_article_kit",
+        "reactiver_article_kit", "supprimer_article_kit",
+        "consulter_remises_kit", "enregistrer_remise_kit",
+        "annuler_remise_kit", "consulter_statistiques_kits",
+        "preparer_remises_kit_masse", "valider_remises_kit_masse",
+        "annuler_remises_kit_masse", "consulter_progression_kits",
+        # Planification réelle des séances dans le centre.
+        "consulter_activites", "consulter_seances", "planifier_seance",
+        "modifier_seance", "annuler_seance", "reporter_seance",
+        "affecter_formateur_seance", "consulter_presences",
+        "consulter_evaluations", "consulter_resultats",
+        "consulter_progression_activites",
+        # Suivi des attestations automatiques et incidents du centre.
+        "consulter_resultats_finaux", "consulter_documents",
+        "telecharger_document", "generer_rapports",
+        "modifier_incident", "prendre_en_charge_incident",
+        "mettre_incident_en_attente", "resoudre_incident",
+        "cloturer_incident", "annuler_incident", "escalader_incident",
+    },
+    "AGENT_SANTE": {
+        "consulter_session", "lister_sessions", "consulter_centre",
+        "consulter_immerge", "lister_immerges",
+        "consulter_visites_medicales", "saisir_resultat_visite_medicale",
+        "corriger_resultat_visite_medicale",
+        "appliquer_resultat_visite_medicale", "annuler_visite_medicale",
+        "consulter_candidats_visite_medicale",
+        "consulter_statistiques_sante", "consulter_restrictions_medicales",
+        "enregistrer_restriction_medicale",
+        "modifier_restriction_medicale", "annuler_restriction_medicale",
+        "lever_restriction_medicale", "consulter_impacts_medicaux",
+        "modifier_incident", "prendre_en_charge_incident",
+        "mettre_incident_en_attente", "resoudre_incident",
+    },
+    "FORMATEUR": {
+        "consulter_session", "lister_sessions", "consulter_centre",
+        "consulter_activites", "consulter_seances", "consulter_presences",
+        "ouvrir_feuille_presence", "saisir_presence", "modifier_presence",
+        "valider_presence", "cloturer_feuille_presence",
+        "calculer_taux_presence", "consulter_evaluations",
+        "ouvrir_saisie_notes", "cloturer_evaluation",
+        "consulter_resultats", "consulter_notes", "saisir_note",
+        "modifier_note", "marquer_absence_note", "marquer_dispense_note",
+        "annuler_note", "calculer_moyenne",
+        "consulter_progression_activites", "modifier_incident",
+    },
+    "GESTIONNAIRE_ALIMENTATION": {
+        "consulter_session", "lister_sessions", "consulter_centre",
+        "consulter_demandes_ravitaillement",
+        "creer_demande_ravitaillement", "modifier_demande_ravitaillement",
+        "soumettre_demande_ravitaillement",
+        "enregistrer_reception_denrees", "consolider_besoins_denrees",
+        "consulter_repas", "planifier_repas", "modifier_repas",
+        "annuler_repas", "calculer_portions_repas",
+        "ouvrir_distribution_repas", "cloturer_distribution_repas",
+        "pointer_repas", "modifier_pointage_repas", "marquer_repas_servi",
+        "marquer_repas_absent", "marquer_repas_refuse",
+        "marquer_repas_dispense", "marquer_regime_special",
+        "consulter_pointages_repas", "generer_rapport_repas",
+        "consulter_progression_repas", "modifier_incident",
+        "prendre_en_charge_incident", "mettre_incident_en_attente",
+        "resoudre_incident",
+    },
+}
+
+
 class Command(BaseCommand):
     help = "Initialise les permissions, les rôles de base et les droits incidents/audit/notifications/documents FasoIM."
 
@@ -641,6 +848,9 @@ class Command(BaseCommand):
         associations_notifications_mises_a_jour = 0
         associations_documents_creees = 0
         associations_documents_mises_a_jour = 0
+        associations_metier_creees = 0
+        associations_metier_mises_a_jour = 0
+        associations_metier_retires = 0
 
         permission_obsolete = Permission.objects.filter(
             code="creer_alerte",
@@ -807,6 +1017,65 @@ class Command(BaseCommand):
                 else:
                     associations_audit_mises_a_jour += 1
 
+        # Synchronisation finale des droits fixes de la V1. Les anciennes
+        # associations non prévues sont retirées logiquement afin qu'un rôle
+        # ne conserve pas des actions provenant d'une ancienne configuration.
+        for code_role, codes_permissions in PERMISSIONS_METIER_PAR_ROLE.items():
+            role = Role.objects.get(code=code_role, deleted_at__isnull=True)
+            codes_attendus = PERMISSIONS_COMMUNES_ROLE | set(codes_permissions)
+            permissions = Permission.objects.filter(
+                code__in=codes_attendus,
+                statut=Permission.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            )
+            codes_trouves = set(permissions.values_list("code", flat=True))
+            codes_inconnus = codes_attendus - codes_trouves
+            if codes_inconnus:
+                raise RuntimeError(
+                    f"Permissions inconnues pour {code_role} : "
+                    + ", ".join(sorted(codes_inconnus))
+                )
+
+            for permission in permissions:
+                _, created = RolePermission.objects.update_or_create(
+                    role=role,
+                    permission=permission,
+                    deleted_at__isnull=True,
+                    defaults={
+                        "est_delegable": False,
+                        "perimetre_delegation_max": role.perimetre_autorise,
+                        "statut": RolePermission.Statut.ACTIVE,
+                        "deleted_at": None,
+                    },
+                )
+                if created:
+                    associations_metier_creees += 1
+                else:
+                    associations_metier_mises_a_jour += 1
+
+            codes_proteges = set().union(
+                PERMISSIONS_AFFECTATIONS_PAR_ROLE.get(code_role, set()),
+                PERMISSIONS_INCIDENTS_PAR_ROLE.get(code_role, set()),
+                PERMISSIONS_NOTIFICATIONS_PAR_ROLE.get(code_role, set()),
+                PERMISSIONS_AUDIT_PAR_ROLE.get(code_role, set()),
+                PERMISSIONS_DOCUMENTS_PAR_ROLE.get(code_role, set()),
+            )
+            associations_obsoletes = (
+                RolePermission.objects.filter(
+                    role=role,
+                    deleted_at__isnull=True,
+                )
+                .exclude(permission__code__in=codes_attendus)
+                .exclude(permission__code__in=codes_proteges)
+            )
+            for association in associations_obsoletes:
+                association.statut = RolePermission.Statut.RETIREE
+                association.deleted_at = timezone.now()
+                association.save(
+                    update_fields=["statut", "deleted_at", "updated_at"]
+                )
+                associations_metier_retires += 1
+
         self.stdout.write(self.style.SUCCESS("Initialisation accounts terminée."))
         self.stdout.write(f"Permissions créées : {permissions_creees}")
         self.stdout.write(f"Permissions mises à jour : {permissions_mises_a_jour}")
@@ -841,4 +1110,13 @@ class Command(BaseCommand):
         self.stdout.write(
             "Associations documents mises à jour : "
             f"{associations_documents_mises_a_jour}"
+        )
+        self.stdout.write(
+            f"Associations métier créées : {associations_metier_creees}"
+        )
+        self.stdout.write(
+            f"Associations métier mises à jour : {associations_metier_mises_a_jour}"
+        )
+        self.stdout.write(
+            f"Associations métier retirées : {associations_metier_retires}"
         )

@@ -113,6 +113,72 @@ class ServiceAsynchroneAccounts:
         transaction.on_commit(_planifier)
 
 
+
+
+class CreationSubordonneeService(ServiceBase):
+    """Règles communes pour créer des collaborateurs sans dépasser ses droits."""
+
+    RANGS = {
+        AffectationActeur.NiveauAffectation.CENTRE: 1,
+        AffectationActeur.NiveauAffectation.REGION: 2,
+        AffectationActeur.NiveauAffectation.NATIONAL: 3,
+        AffectationActeur.NiveauAffectation.PLATEFORME: 4,
+    }
+
+    @staticmethod
+    def affectation_source(acteur):
+        if getattr(acteur, "is_superuser", False):
+            return None
+        affectation_id = obtenir_affectation_courante_id()
+        affectation = None
+        if affectation_id not in (None, -1):
+            affectation = AffectationActeurRepository.get_active_by_id(affectation_id)
+        if affectation is None or affectation.acteur_id != acteur.id:
+            raise ValidationError("Choisissez une affectation active avant de créer ou déléguer.")
+        return affectation
+
+    @staticmethod
+    def verifier_perimetre(source, *, niveau, session_id=None, region_code=None, centre_id=None):
+        if source is None:
+            return
+        if CreationSubordonneeService.RANGS.get(niveau, 0) > CreationSubordonneeService.RANGS.get(source.niveau_affectation, 0):
+            raise ValidationError("Le périmètre cible dépasse celui du créateur.")
+        if source.session_id and session_id != source.session_id:
+            raise ValidationError("La session cible doit être celle de l'affectation du créateur.")
+        if source.niveau_affectation == AffectationActeur.NiveauAffectation.REGION:
+            if region_code and region_code != source.region_code:
+                raise ValidationError("La région cible dépasse le périmètre du créateur.")
+            if centre_id:
+                from affectations.models import CentreImmersion
+                ok = CentreImmersion.objects.filter(id=centre_id, region__code=source.region_code, deleted_at__isnull=True).exists()
+                if not ok:
+                    raise ValidationError("Le centre cible n'appartient pas à la région du créateur.")
+        if source.niveau_affectation == AffectationActeur.NiveauAffectation.CENTRE and centre_id != source.centre_id:
+            raise ValidationError("Le centre cible doit être celui du créateur.")
+
+    @staticmethod
+    def verifier_role_creable(acteur, *, niveau, perimetre_autorise):
+        source = CreationSubordonneeService.affectation_source(acteur)
+        if source is None:
+            return source
+        niveaux = list(AffectationRole.objects.filter(affectation_acteur=source, statut=AffectationRole.Statut.ACTIF, deleted_at__isnull=True).values_list("role__niveau", flat=True))
+        if not niveaux or niveau < min(niveaux):
+            raise ValidationError("Le rôle créé doit être de niveau égal ou inférieur au vôtre.")
+        if CreationSubordonneeService.RANGS.get(perimetre_autorise, 0) > CreationSubordonneeService.RANGS.get(source.niveau_affectation, 0):
+            raise ValidationError("Le rôle créé possède un périmètre trop large.")
+        return source
+
+    @staticmethod
+    def verifier_permission_attribuable(acteur, permission):
+        source = CreationSubordonneeService.affectation_source(acteur)
+        if source is None:
+            return source
+        permissions = ControleAccesRepository.get_permission_codes_acteur(acteur, source)
+        if permission.code not in permissions:
+            raise ValidationError("Vous ne pouvez attribuer qu'une permission que vous possédez.")
+        return source
+
+
 class ActeurService(ServiceBase):
     """Gestion métier des acteurs internes FasoIM."""
 
@@ -386,8 +452,10 @@ class RoleService(ServiceBase):
 
     @staticmethod
     @transaction.atomic
-    def creer_role_personnalise(*, libelle, niveau, perimetre_autorise, description=""):
+    def creer_role_personnalise(*, libelle, niveau, perimetre_autorise, description="", cree_par=None):
         libelle = RoleService.normaliser_texte(libelle)
+        if cree_par is not None and not getattr(cree_par, "is_superuser", False):
+            CreationSubordonneeService.verifier_role_creable(cree_par, niveau=niveau, perimetre_autorise=perimetre_autorise)
         if not libelle:
             raise ValidationError({"libelle": "Le libellé du rôle est obligatoire."})
 
@@ -542,13 +610,17 @@ class RolePermissionService(ServiceBase):
 
     @staticmethod
     @transaction.atomic
-    def ajouter_permission(role, permission, *, est_delegable=False, perimetre_delegation_max=""):
+    def ajouter_permission(role, permission, *, est_delegable=False, perimetre_delegation_max="", attribue_par=None):
         role = RoleRepository.get_actif_by_id(RolePermissionService.identifiant(role))
         permission = PermissionRepository.get_actif_by_id(RolePermissionService.identifiant(permission))
         if not role:
             raise ValidationError("Rôle introuvable ou inactif.")
         if not permission:
             raise ValidationError("Permission introuvable ou inactive.")
+        if role.est_systeme and attribue_par is not None:
+            raise ValidationError("Les permissions d’un rôle système sont gérées uniquement par le seed.")
+        if attribue_par is not None and not getattr(attribue_par, "is_superuser", False):
+            CreationSubordonneeService.verifier_permission_attribuable(attribue_par, permission)
         if RolePermissionRepository.permission_deja_associee(role, permission):
             raise ValidationError("Cette permission est déjà associée à ce rôle.")
 
@@ -605,17 +677,11 @@ class AffectationActeurService(ServiceBase):
         session_id = getattr(session, "id", session) if session is not None else None
 
         if affecte_par is not None and not getattr(affecte_par, "is_superuser", False):
-            resultat = ControleAccesService.acteur_peut(
-                affecte_par,
-                AffectationActeurService.PERMISSION_AFFECTER_ACTEUR,
-                session_id=session_id,
-                region_code=region_code or None,
-                centre_id=centre_id,
+            source = CreationSubordonneeService.affectation_source(affecte_par)
+            CreationSubordonneeService.verifier_perimetre(
+                source, niveau=niveau_affectation, session_id=session_id,
+                region_code=region_code or None, centre_id=centre_id,
             )
-            if not resultat.autorise:
-                raise ValidationError(
-                    "L'acteur qui crée l'affectation n'a pas le droit d'agir sur ce périmètre."
-                )
 
         affectation = AffectationActeur(
             acteur=acteur,
@@ -726,19 +792,6 @@ class AffectationRoleService(ServiceBase):
             if affectation_source is None or affectation_source.acteur_id != attribue_par.id:
                 raise ValidationError(
                     "Choisissez une affectation de travail valide avant d'attribuer un rôle."
-                )
-
-            resultat = ControleAccesService.acteur_peut(
-                attribue_par,
-                "attribuer_role",
-                affectation=affectation_source,
-                session_id=affectation.session_id,
-                region_code=affectation.region_code or None,
-                centre_id=affectation.centre_id,
-            )
-            if not resultat.autorise:
-                raise ValidationError(
-                    "Votre affectation courante ne permet pas d'attribuer un rôle sur ce périmètre."
                 )
 
             niveaux_source = list(
