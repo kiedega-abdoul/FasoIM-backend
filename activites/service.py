@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import time
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
@@ -1592,7 +1593,7 @@ class EvaluationService(ServiceActiviteBase):
     PERMISSION_VALIDER_RESULTATS = "valider_resultats"
 
     @classmethod
-    def _seance_optionnelle(
+    def _seance_obligatoire(
         cls,
         seance_id,
         *,
@@ -1600,7 +1601,9 @@ class EvaluationService(ServiceActiviteBase):
         centre_id,
     ):
         if not seance_id:
-            return None
+            raise ValidationActiviteErreur(
+                {"seance_id": "Une évaluation doit obligatoirement être liée à une séance."}
+            )
 
         try:
             seance = SeanceRepository.get_by_id(seance_id)
@@ -1639,7 +1642,7 @@ class EvaluationService(ServiceActiviteBase):
         type_evaluation,
         bareme,
         coefficient,
-        date_evaluation,
+        date_evaluation=None,
         seance_id=None,
         statut=Evaluation.Statut.BROUILLON,
     ):
@@ -1647,21 +1650,21 @@ class EvaluationService(ServiceActiviteBase):
         centre = cls._centre(centre_id)
         cls._exiger_session_modifiable(session)
         cls._exiger_evaluations_actives(session)
-        cls._exiger_date_dans_session(
-            session,
-            date_evaluation,
-        )
-
         if not centre.est_actif:
             raise ValidationActiviteErreur(
                 "Le centre doit être actif."
             )
 
-        seance = cls._seance_optionnelle(
+        seance = cls._seance_obligatoire(
             seance_id,
             session_id=session.id,
             centre_id=centre.id,
         )
+        date_evaluation = timezone.make_aware(
+            datetime.combine(seance.date_seance, seance.heure_debut)
+        ) if timezone.is_naive(datetime.combine(seance.date_seance, seance.heure_debut)) else datetime.combine(seance.date_seance, seance.heure_debut)
+        cls._exiger_date_dans_session(session, date_evaluation)
+
         if statut != Evaluation.Statut.BROUILLON:
             raise ValidationActiviteErreur(
                 {
@@ -1731,7 +1734,7 @@ class EvaluationService(ServiceActiviteBase):
         centre = cls._centre(
             donnees.get("centre_id", evaluation.centre_id)
         )
-        seance = cls._seance_optionnelle(
+        seance = cls._seance_obligatoire(
             donnees.get("seance_id", evaluation.seance_id),
             session_id=session.id,
             centre_id=centre.id,

@@ -299,8 +299,9 @@ class ActivitesFixtureMixin:
         statut=Evaluation.Statut.BROUILLON,
         date_evaluation=None,
     ):
+        seance = seance or self.creer_seance()
         date_evaluation = date_evaluation or timezone.make_aware(
-            datetime(2026, 8, 10, 11, 0)
+            datetime.combine(seance.date_seance, seance.heure_debut)
         )
         return Evaluation.objects.create(
             session=self.session,
@@ -990,6 +991,7 @@ class ServicesActivitesTests(
         self.assertEqual(resultat["dispenses"], 1)
 
     def test_creation_evaluation_commence_en_brouillon(self):
+        seance = self.creer_seance()
         evaluation = EvaluationService.creer_evaluation(
             acteur=self.acteur,
             session_id=self.session.id,
@@ -998,6 +1000,7 @@ class ServicesActivitesTests(
             type_evaluation=Evaluation.TypeEvaluation.FINALE,
             bareme=Decimal("20.00"),
             coefficient=Decimal("2.00"),
+            seance_id=seance.id,
             date_evaluation=timezone.make_aware(
                 datetime(2026, 8, 20, 9, 0)
             ),
@@ -1158,12 +1161,15 @@ class ServicesActivitesTests(
         )
 
     def test_calcul_moyenne_ponderee_sur_vingt(self):
+        seance = self.creer_seance()
         evaluation_1 = self.creer_evaluation(
+            seance=seance,
             titre="Évaluation 1",
             coefficient=Decimal("1.00"),
             statut=Evaluation.Statut.CLOTUREE,
         )
         evaluation_2 = self.creer_evaluation(
+            seance=seance,
             titre="Évaluation 2",
             coefficient=Decimal("2.00"),
             statut=Evaluation.Statut.CLOTUREE,
@@ -1279,7 +1285,8 @@ class SerializersActivitesTests(SimpleTestCase):
         serializer = EvaluationCreateSerializer(
             data={
                 "session_id": 1,
-                "centre_id": 2,
+                "centre_id": 1,
+                "seance_id": 1,
                 "titre": "Test",
                 "type_evaluation": "TEST",
                 "bareme": "20.00",
@@ -1624,11 +1631,13 @@ class ApiActivitesTests(ActivitesFixtureMixin, TestCase):
         )
 
     def test_creation_evaluation_par_api(self):
+        seance = self.creer_seance()
         reponse = self.client.post(
             "/api/activites/evaluations/",
             {
                 "session_id": self.session.id,
                 "centre_id": self.centre.id,
+                "seance_id": seance.id,
                 "titre": "Évaluation API",
                 "type_evaluation": "TEST",
                 "bareme": "20.00",

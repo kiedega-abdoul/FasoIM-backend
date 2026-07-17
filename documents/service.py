@@ -1411,6 +1411,296 @@ class AttestationService:
         return resume
 
 
+class WorkflowAutomatiqueAttestationService:
+    """Prépare automatiquement les attestations, puis attend la validation régionale."""
+
+    @staticmethod
+    def _directeur_regional(*, session, region):
+        qs = Acteur.objects.filter(
+            statut=Acteur.Statut.ACTIF,
+            is_active=True,
+            deleted_at__isnull=True,
+            affectations__statut=AffectationActeur.Statut.ACTIVE,
+            affectations__deleted_at__isnull=True,
+            affectations__session=session,
+            affectations__niveau_affectation=AffectationActeur.NiveauAffectation.REGION,
+            affectations__region_code=region.code,
+            affectations__roles_affectes__statut=AffectationRole.Statut.ACTIF,
+            affectations__roles_affectes__deleted_at__isnull=True,
+            affectations__roles_affectes__role__code="DIRECTEUR_REGIONAL",
+            affectations__roles_affectes__role__statut=Role.Statut.ACTIF,
+            affectations__roles_affectes__role__deleted_at__isnull=True,
+        ).distinct()
+        total = qs.count()
+        if total != 1:
+            raise ValidationDocumentsErreur(
+                f"La région {region.nom} doit avoir exactement un Directeur régional actif pour cette session."
+            )
+        directeur = qs.get()
+        if not GenerationFichierService.images_signataire_disponibles(directeur):
+            raise ValidationDocumentsErreur(
+                f"La signature et le cachet du Directeur régional de {region.nom} sont obligatoires."
+            )
+        return directeur
+
+    @staticmethod
+    def _acteur_systeme():
+        acteur = Acteur.objects.filter(
+            is_superuser=True,
+            is_active=True,
+            statut=Acteur.Statut.ACTIF,
+            deleted_at__isnull=True,
+        ).order_by("id").first()
+        if acteur is None:
+            raise ValidationDocumentsErreur(
+                "Aucun compte système actif n'est disponible pour le traitement automatique."
+            )
+        return acteur
+
+    @classmethod
+    @transaction.atomic
+    def preparer_centre(cls, *, session, centre):
+        etat = CentreCertificationService.verifier(session=session, centre=centre)
+        if not etat["pret"]:
+            return {"prepare": False, "centre_id": centre.id, "blocages": etat["blocages"]}
+
+        acteur_systeme = cls._acteur_systeme()
+        directeur = cls._directeur_regional(session=session, region=centre.region)
+
+        EligibiliteAttestationService.calculer_centre(
+            session_id=session.id,
+            centre_id=centre.id,
+            acteur=acteur_systeme,
+        )
+        maintenant = timezone.now()
+        ResultatFinal.objects.filter(
+            session=session,
+            centre=centre,
+            statut=ResultatFinal.Statut.CALCULE,
+            deleted_at__isnull=True,
+        ).update(
+            statut=ResultatFinal.Statut.VALIDE_CENTRE,
+            valide_centre_par=acteur_systeme,
+            date_validation_centre=maintenant,
+            updated_at=maintenant,
+        )
+        AttestationService.generer_centre(
+            session_id=session.id,
+            centre_id=centre.id,
+            acteur=acteur_systeme,
+        )
+        publication = PublicationService.soumettre_attestations_centre(
+            session_id=session.id,
+            centre_id=centre.id,
+            acteur=acteur_systeme,
+        )
+
+        documents = list(DocumentGenere.objects.select_for_update().select_related(
+            "resultat_final", "immerge"
+        ).filter(
+            session=session,
+            centre=centre,
+            type_document=DocumentGenere.TypeDocument.ATTESTATION,
+            resultat_final__decision=ResultatFinal.Decision.ELIGIBLE,
+            deleted_at__isnull=True,
+        ))
+        for document in documents:
+            pdf, _qr = GenerationFichierService.pdf_attestation(
+                resultat=document.resultat_final,
+                document=document,
+                signataire=directeur,
+            )
+            document.signataire = directeur
+            document.nom_signataire_snapshot = directeur.nom_complet or directeur.username
+            document.fonction_signataire_snapshot = directeur.titre
+            document.organisation_signataire_snapshot = directeur.organisation
+            document.signature_appliquee = True
+            document.cachet_applique = True
+            document.date_signature = maintenant
+            document.statut = DocumentGenere.Statut.SIGNE
+            GenerationFichierService.enregistrer(document, pdf, extension="pdf")
+
+        publication.statut = PublicationOfficielle.Statut.SOUMISE_REGION
+        publication.resume = {
+            **(publication.resume or {}),
+            "attestations_signees": len(documents),
+            "validation_regionale_requise": True,
+        }
+        publication.save(update_fields=["statut", "resume", "updated_at"])
+        NotificationService.planifier_acteurs_role(
+            code_role="DIRECTEUR_REGIONAL",
+            sujet="Attestations prêtes à valider",
+            message=(
+                f"Les attestations du centre {centre.nom} ont été calculées, générées et signées. "
+                "Elles attendent votre validation avant publication."
+            ),
+            type_message=getattr(TypesMessage, "ATTESTATIONS_SOUMISES_REGION", "ATTESTATIONS_SOUMISES_REGION"),
+            cle_evenement=f"ATTESTATIONS_A_VALIDER:{publication.reference}",
+            session_id=session.id,
+            region_code=centre.region.code,
+            centre_id=centre.id,
+            contexte={"publication_id": publication.id, "centre_id": centre.id},
+        )
+        return {
+            "prepare": True,
+            "centre_id": centre.id,
+            "publication_id": publication.id,
+            "attestations_signees": len(documents),
+        }
+
+    @classmethod
+    @transaction.atomic
+    def valider_et_publier(cls, *, publication_id, acteur):
+        publication = PublicationOfficielleRepository.get_by_id_pour_update(publication_id)
+        if publication.type_publication != PublicationOfficielle.TypePublication.ATTESTATIONS:
+            raise ValidationDocumentsErreur("Cette publication ne concerne pas les attestations.")
+        if publication.statut == PublicationOfficielle.Statut.PUBLIEE:
+            return {"publication_id": publication.id, "deja_publiee": True}
+        if publication.statut != PublicationOfficielle.Statut.SOUMISE_REGION:
+            raise ValidationDocumentsErreur("Le lot d'attestations n'est pas prêt à être validé.")
+        ControleAccesDocumentsService.exiger(
+            acteur,
+            "valider_publication_region",
+            session_id=publication.session_id,
+            region_code=publication.region.code,
+            centre_id=publication.centre_id,
+        )
+        if not AffectationRole.objects.filter(
+            affectation_acteur__acteur=acteur,
+            affectation_acteur__session=publication.session,
+            affectation_acteur__region_code=publication.region.code,
+            affectation_acteur__statut=AffectationActeur.Statut.ACTIVE,
+            affectation_acteur__deleted_at__isnull=True,
+            role__code="DIRECTEUR_REGIONAL",
+            statut=AffectationRole.Statut.ACTIF,
+            deleted_at__isnull=True,
+        ).exists():
+            raise ValidationDocumentsErreur("Seul le Directeur régional de ce périmètre peut valider ces attestations.")
+
+        documents = DocumentGenere.objects.select_for_update().filter(
+            publication__isnull=True,
+            session=publication.session,
+            centre=publication.centre,
+            type_document=DocumentGenere.TypeDocument.ATTESTATION,
+            statut=DocumentGenere.Statut.SIGNE,
+            deleted_at__isnull=True,
+        )
+        attendus = ResultatFinal.objects.filter(
+            session=publication.session,
+            centre=publication.centre,
+            decision=ResultatFinal.Decision.ELIGIBLE,
+            deleted_at__isnull=True,
+        ).count()
+        if documents.count() != attendus:
+            raise ValidationDocumentsErreur("Toutes les attestations éligibles doivent être signées avant validation.")
+
+        maintenant = timezone.now()
+        documents.update(
+            statut=DocumentGenere.Statut.PUBLIE,
+            visibilite=DocumentGenere.Visibilite.PUBLIC_VERIFICATION,
+            publication=publication,
+            date_publication=maintenant,
+            updated_at=maintenant,
+        )
+        ResultatFinal.objects.filter(
+            session=publication.session,
+            centre=publication.centre,
+            deleted_at__isnull=True,
+        ).update(
+            statut=ResultatFinal.Statut.PUBLIE,
+            valide_region_par=acteur,
+            date_validation_region=maintenant,
+            date_publication=maintenant,
+            updated_at=maintenant,
+        )
+        publication.statut = PublicationOfficielle.Statut.PUBLIEE
+        publication.validee_region_par = acteur
+        publication.publiee_par = acteur
+        publication.date_validation_region = maintenant
+        publication.date_publication = maintenant
+        publication.save()
+        immerge_ids = list(ResultatFinal.objects.filter(
+            session=publication.session,
+            centre=publication.centre,
+            decision=ResultatFinal.Decision.ELIGIBLE,
+            deleted_at__isnull=True,
+        ).values_list("immerge_id", flat=True))
+        NotificationService.planifier_attestations_publiees(
+            immerge_ids=immerge_ids,
+            publication_reference=publication.reference,
+            region_id=publication.region_id,
+            centre_id=publication.centre_id,
+        )
+        JournalActionService.journaliser_succes(
+            acteur=acteur,
+            session=publication.session,
+            region=publication.region,
+            centre=publication.centre,
+            code_action="valider_publier_attestations_region",
+            module_source="documents",
+            objet=publication,
+            motif="Attestations validées par la région et publiées automatiquement.",
+            contexte={"attestations_publiees": attendus},
+        )
+        return {"publication_id": publication.id, "publiees": attendus}
+
+    @classmethod
+    def valider_lot(cls, *, publication_ids, acteur):
+        resultat = {"selectionnees": len(publication_ids), "validees": 0, "publiees": 0, "ignorees": 0, "echecs": []}
+        for publication_id in dict.fromkeys(publication_ids):
+            try:
+                ligne = cls.valider_et_publier(publication_id=publication_id, acteur=acteur)
+                if ligne.get("deja_publiee"):
+                    resultat["ignorees"] += 1
+                else:
+                    resultat["validees"] += 1
+                    resultat["publiees"] += ligne.get("publiees", 0)
+            except Exception as exc:
+                resultat["echecs"].append({"publication_id": publication_id, "motif": str(exc)})
+        return resultat
+
+    @classmethod
+    def statistiques_region(cls, *, session_id, acteur, region_id=None):
+        session = SessionImmersion.objects.get(id=session_id, deleted_at__isnull=True)
+        publications = PublicationOfficielleRepository.visibles_par_acteur(acteur).filter(
+            session=session,
+            type_publication=PublicationOfficielle.TypePublication.ATTESTATIONS,
+            deleted_at__isnull=True,
+        )
+        if region_id:
+            publications = publications.filter(region_id=region_id)
+        regions = publications.values("region_id", "region__nom").distinct()
+        sorties = []
+        for region in regions:
+            rid = region["region_id"]
+            resultats = ResultatFinal.objects.filter(session=session, region_id=rid, deleted_at__isnull=True)
+            documents = DocumentGenere.objects.filter(
+                session=session,
+                region_id=rid,
+                type_document=DocumentGenere.TypeDocument.ATTESTATION,
+                deleted_at__isnull=True,
+            )
+            total = resultats.count()
+            publiees = documents.filter(statut=DocumentGenere.Statut.PUBLIE).count()
+            sorties.append({
+                "region_id": rid,
+                "region_nom": region["region__nom"],
+                "total_immerges": total,
+                "eligibles": resultats.filter(decision=ResultatFinal.Decision.ELIGIBLE).count(),
+                "non_eligibles": resultats.filter(decision=ResultatFinal.Decision.NON_ELIGIBLE).count(),
+                "a_verifier": resultats.filter(decision=ResultatFinal.Decision.A_VERIFIER).count(),
+                "generees": documents.count(),
+                "signees": documents.filter(statut=DocumentGenere.Statut.SIGNE).count(),
+                "publiees": publiees,
+                "bloquees": documents.filter(statut=DocumentGenere.Statut.ECHEC).count(),
+                "taux_couverture": round((publiees * 100 / total), 2) if total else 100.0,
+                "centres": list(publications.filter(region_id=rid).values(
+                    "centre_id", "centre__nom", "statut", "resume"
+                ).order_by("centre__nom")),
+            })
+        return {"session_id": session.id, "regions": sorties}
+
+
 class PublicationService:
     @staticmethod
     def _resume_arrivee(session, centre):

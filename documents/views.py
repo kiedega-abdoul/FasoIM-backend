@@ -31,6 +31,8 @@ from .serializers import (
     RejetPublicationSerializer,
     ResultatFinalSerializer,
     VerificationAttestationSerializer,
+    ValidationAttestationsLotSerializer,
+    StatistiquesAttestationsRegionSerializer,
 )
 from .service import (
     AttestationPubliqueService,
@@ -42,6 +44,7 @@ from .service import (
     PublicationService,
     SessionClotureService,
     ValidationDocumentsErreur,
+    WorkflowAutomatiqueAttestationService,
 )
 from .tasks import (
     calculer_resultats_centre_task,
@@ -135,6 +138,9 @@ class PublicationOfficielleViewSet(viewsets.ReadOnlyModelViewSet):
         "signer_attestations": "signer_attestations_region",
         "rejeter_region": "rejeter_publication_region",
         "publier_session": "publier_documents_session",
+        "valider_attestations": "valider_publication_region",
+        "valider_attestations_lot": "valider_publication_region",
+        "statistiques_attestations_region": "consulter_resultats_finaux",
     }
 
     def get_queryset(self):
@@ -198,6 +204,38 @@ class PublicationOfficielleViewSet(viewsets.ReadOnlyModelViewSet):
             {"task_id": resultat.id, "statut": "EN_ATTENTE"},
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=True, methods=["post"], url_path="valider-attestations")
+    def valider_attestations(self, request, pk=None):
+        try:
+            resultat = WorkflowAutomatiqueAttestationService.valider_et_publier(
+                publication_id=pk, acteur=request.user
+            )
+        except (DjangoValidationError, ValidationDocumentsErreur) as exc:
+            _lever(exc)
+        return Response(resultat)
+
+    @action(detail=False, methods=["post"], url_path="valider-attestations-lot")
+    def valider_attestations_lot(self, request):
+        serializer = ValidationAttestationsLotSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        resultat = WorkflowAutomatiqueAttestationService.valider_lot(
+            publication_ids=serializer.validated_data["publication_ids"],
+            acteur=request.user,
+        )
+        return Response(resultat)
+
+    @action(detail=False, methods=["get"], url_path="statistiques-attestations-region")
+    def statistiques_attestations_region(self, request):
+        serializer = StatistiquesAttestationsRegionSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        try:
+            resultat = WorkflowAutomatiqueAttestationService.statistiques_region(
+                acteur=request.user, **serializer.validated_data
+            )
+        except (DjangoValidationError, ValidationDocumentsErreur) as exc:
+            _lever(exc)
+        return Response(resultat)
 
     @action(detail=True, methods=["post"], url_path="rejeter-region")
     def rejeter_region(self, request, pk=None):

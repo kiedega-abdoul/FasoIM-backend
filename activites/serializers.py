@@ -786,11 +786,7 @@ class EvaluationSerializer(serializers.ModelSerializer):
 class EvaluationCreateSerializer(serializers.Serializer):
     session_id = serializers.IntegerField(min_value=1)
     centre_id = serializers.IntegerField(min_value=1)
-    seance_id = serializers.IntegerField(
-        min_value=1,
-        required=False,
-        allow_null=True,
-    )
+    seance_id = serializers.IntegerField(min_value=1)
     titre = serializers.CharField(max_length=180)
     type_evaluation = serializers.ChoiceField(
         choices=Evaluation.TypeEvaluation.choices,
@@ -806,7 +802,7 @@ class EvaluationCreateSerializer(serializers.Serializer):
         min_value=Decimal("0.01"),
         default="1.00",
     )
-    date_evaluation = serializers.DateTimeField()
+    date_evaluation = serializers.DateTimeField(required=False)
     statut = serializers.HiddenField(
         default=Evaluation.Statut.BROUILLON,
     )
@@ -824,7 +820,6 @@ class EvaluationUpdateSerializer(serializers.Serializer):
     seance_id = serializers.IntegerField(
         min_value=1,
         required=False,
-        allow_null=True,
     )
     titre = serializers.CharField(
         max_length=180,

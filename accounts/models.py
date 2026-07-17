@@ -260,6 +260,17 @@ class AffectationActeur(models.Model):
         if self.session_id and self.session and self.session.statut not in self.SESSION_STATUTS_ACTIFS:
             raise ValidationError({"session": "Une affectation liée à une session exige une session opérationnelle."})
 
+        if self.session_id is None and self.niveau_affectation not in {
+            self.NiveauAffectation.PLATEFORME,
+            self.NiveauAffectation.NATIONAL,
+        }:
+            raise ValidationError({
+                "session": (
+                    "Une affectation permanente est autorisée uniquement "
+                    "aux niveaux plateforme et national."
+                )
+            })
+
         if self.niveau_affectation == self.NiveauAffectation.REGION and not self.region_code:
             raise ValidationError({"region_code": "La région est obligatoire pour une affectation régionale."})
 

@@ -187,6 +187,8 @@ class Seance(models.Model):
     module_activite = models.ForeignKey(
         ModuleActivite,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="seances",
     )
     session = models.ForeignKey(
@@ -319,7 +321,7 @@ class Seance(models.Model):
         ]
 
     def __str__(self):
-        titre = self.titre or self.module_activite.titre
+        titre = self.titre or (self.module_activite.titre if self.module_activite_id else "Séance")
         return (
             f"{titre} - "
             f"{self.date_seance} {self.heure_debut}"
@@ -662,8 +664,6 @@ class Evaluation(models.Model):
     seance = models.ForeignKey(
         Seance,
         on_delete=models.PROTECT,
-        null=True,
-        blank=True,
         related_name="evaluations",
     )
 

@@ -110,6 +110,8 @@ class SessionImmersion(models.Model):
     description = models.TextField(blank=True)
     motif_annulation = models.TextField(blank=True)
     date_annulation = models.DateTimeField(null=True, blank=True)
+    cloture_proposee_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    cloture_proposee_blocages = models.JSONField(default=list, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

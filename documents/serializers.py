@@ -148,3 +148,16 @@ class VerificationAttestationSerializer(serializers.Serializer):
 
 class ProgressionDocumentSerializer(serializers.Serializer):
     task_id = serializers.UUIDField()
+
+
+class ValidationAttestationsLotSerializer(serializers.Serializer):
+    publication_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        max_length=500,
+    )
+
+
+class StatistiquesAttestationsRegionSerializer(serializers.Serializer):
+    session_id = serializers.IntegerField(min_value=1)
+    region_id = serializers.IntegerField(min_value=1, required=False)

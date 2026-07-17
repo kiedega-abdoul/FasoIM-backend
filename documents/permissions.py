@@ -37,6 +37,9 @@ class PermissionDocuments(BasePermission):
         "soumettre_attestations": "soumettre_publication_centre",
         "valider_region": "valider_publication_region",
         "signer_attestations": "signer_attestations_region",
+        "valider_attestations": "valider_publication_region",
+        "valider_attestations_lot": "valider_publication_region",
+        "statistiques_attestations_region": "consulter_resultats_finaux",
         "rejeter_region": "rejeter_publication_region",
         "publier_session": "publier_documents_session",
         # Fichiers

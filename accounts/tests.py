@@ -265,9 +265,20 @@ class AccountsServiceTests(TestCase):
             libelle="Lister les acteurs",
             module="accounts",
         )
+        session = SessionImmersion.objects.create(
+            nom="Session régionale",
+            annee=2026,
+            numero_promotion=91,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=timezone.localdate() - timedelta(days=1),
+            date_fin=timezone.localdate() + timedelta(days=10),
+            statut=SessionImmersion.Statut.EN_COURS,
+        )
         affectation = AffectationActeurService.creer_affectation(
             acteur=acteur,
             niveau_affectation=AffectationActeur.NiveauAffectation.REGION,
+            session=session,
             region_code="CENTRE",
             affecte_par=self.admin,
         )
@@ -278,8 +289,18 @@ class AccountsServiceTests(TestCase):
             motif="Test permission directe",
         )
 
-        autorise = ControleAccesService.acteur_peut(acteur, "lister_acteurs", region_code="CENTRE")
-        refuse = ControleAccesService.acteur_peut(acteur, "lister_acteurs", region_code="HAUTS_BASSINS")
+        autorise = ControleAccesService.acteur_peut(
+            acteur,
+            "lister_acteurs",
+            session_id=session.id,
+            region_code="CENTRE",
+        )
+        refuse = ControleAccesService.acteur_peut(
+            acteur,
+            "lister_acteurs",
+            session_id=session.id,
+            region_code="HAUTS_BASSINS",
+        )
 
         self.assertTrue(autorise.autorise)
         self.assertFalse(refuse.autorise)
@@ -491,10 +512,21 @@ class AccountsAPITests(TestCase):
             last_name="API",
         )
 
+        session = SessionImmersion.objects.create(
+            nom="Session API régionale",
+            annee=2026,
+            numero_promotion=92,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=timezone.localdate() - timedelta(days=1),
+            date_fin=timezone.localdate() + timedelta(days=10),
+            statut=SessionImmersion.Statut.EN_COURS,
+        )
         response = self.client.post(
             reverse("accounts:affectation-acteur-list"),
             {
                 "acteur_id": acteur.id,
+                "session_id": session.id,
                 "niveau_affectation": AffectationActeur.NiveauAffectation.REGION,
                 "region_code": "CENTRE",
             },
@@ -566,9 +598,20 @@ class ContexteActeurAPITests(TestCase):
             acteur=self.acteur,
             niveau_affectation=AffectationActeur.NiveauAffectation.NATIONAL,
         )
+        session = SessionImmersion.objects.create(
+            nom="Session contexte régionale",
+            annee=2026,
+            numero_promotion=93,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=timezone.localdate() - timedelta(days=1),
+            date_fin=timezone.localdate() + timedelta(days=10),
+            statut=SessionImmersion.Statut.EN_COURS,
+        )
         autre = AffectationActeurService.creer_affectation(
             acteur=self.acteur,
             niveau_affectation=AffectationActeur.NiveauAffectation.REGION,
+            session=session,
             region_code="CENTRE",
         )
 

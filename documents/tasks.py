@@ -24,6 +24,7 @@ from .service import (
     PublicationService,
     RapportService,
     SessionClotureService,
+    WorkflowAutomatiqueAttestationService,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,50 +130,62 @@ def generer_rapport_task(
 
 @shared_task(bind=True, name="documents.detecter_centres_prets_attestations")
 def detecter_centres_prets_attestations_task(self):
-    """Avertit une seule fois les responsables lorsque leur centre est prêt.
-
-    La date de fin déclenche seulement le contrôle. Elle ne clôture jamais la
-    session et ne génère aucune attestation à la place du Responsable.
-    """
+    """Prépare automatiquement les attestations des centres réellement finalisés."""
     aujourd_hui = timezone.localdate()
-    sessions = SessionImmersion.objects.select_related("parametres").filter(
-        date_fin__lte=aujourd_hui,
-        parametres__attestation_active=True,
-        deleted_at__isnull=True,
-    ).exclude(
-        statut__in=[
-            SessionImmersion.Statut.TERMINEE,
-            SessionImmersion.Statut.ARCHIVEE,
-            SessionImmersion.Statut.ANNULEE,
-        ]
+    sessions = list(
+        SessionImmersion.objects.select_related("parametres").filter(
+            date_fin__lte=aujourd_hui,
+            parametres__attestation_active=True,
+            deleted_at__isnull=True,
+        ).exclude(
+            statut__in=[
+                SessionImmersion.Statut.TERMINEE,
+                SessionImmersion.Statut.ARCHIVEE,
+                SessionImmersion.Statut.ANNULEE,
+            ]
+        )
     )
-    sessions = list(sessions)
     prets = 0
     bloques = 0
+    erreurs = []
     for session in sessions:
-        centres = PublicationService._centres_attendus(session)
-        for centre in centres:
-            etat = CentreCertificationService.verifier(session=session, centre=centre)
-            if not etat["pret"]:
+        for centre in PublicationService._centres_attendus(session):
+            try:
+                resultat = WorkflowAutomatiqueAttestationService.preparer_centre(
+                    session=session, centre=centre
+                )
+                if resultat.get("prepare"):
+                    prets += 1
+                else:
+                    bloques += 1
+            except Exception as exc:
                 bloques += 1
-                continue
-            prets += 1
+                erreurs.append({"session_id": session.id, "centre_id": centre.id, "motif": str(exc)})
+
+        etat = SessionClotureService.verifier(session)
+        session.cloture_proposee_blocages = etat.en_dict().get("blocages", [])
+        session.cloture_proposee_at = timezone.now() if etat.cloturable else None
+        session.save(update_fields=[
+            "cloture_proposee_blocages", "cloture_proposee_at", "updated_at"
+        ])
+        if etat.cloturable:
             NotificationService.planifier_acteurs_role(
-                code_role="RESPONSABLE_CENTRE",
-                sujet="Attestations à préparer pour votre centre",
+                code_role="ADMINISTRATEUR",
+                sujet="Session prête à clôturer",
                 message=(
-                    f"La session {session.nom} a atteint sa date de fin et les opérations "
-                    f"du centre {centre.nom} sont finalisées. Vous pouvez maintenant lancer "
-                    "le calcul des résultats finaux et préparer les attestations."
+                    f"La session {session.nom} a été vérifiée automatiquement et peut être clôturée."
                 ),
-                type_message=getattr(TypesMessage, "CENTRE_PRET_ATTESTATIONS", "CENTRE_PRET_ATTESTATIONS"),
-                cle_evenement=f"CENTRE_PRET_ATTESTATIONS:{session.id}:{centre.id}",
+                type_message=getattr(TypesMessage, "SESSION_PRETE_CLOTURE", "SESSION_PRETE_CLOTURE"),
+                cle_evenement=f"SESSION_PRETE_CLOTURE:{session.id}",
                 session_id=session.id,
-                region_code=centre.region.code,
-                centre_id=centre.id,
-                contexte={"session_id": session.id, "centre_id": centre.id},
+                contexte={"session_id": session.id},
             )
-    return {"sessions": len(sessions), "centres_prets": prets, "centres_bloques": bloques}
+    return {
+        "sessions": len(sessions),
+        "centres_prets": prets,
+        "centres_bloques": bloques,
+        "erreurs": erreurs,
+    }
 
 
 @shared_task(bind=True, name="documents.signer_attestations_region")
