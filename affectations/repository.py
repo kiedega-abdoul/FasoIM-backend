@@ -214,7 +214,7 @@ class CentreImmersionRepository:
         )
 
     @staticmethod
-    def capacites_ouvertes_par_region(*, session_id, region_ids=None):
+    def capacites_ouvertes_par_region(*, session_id, region_ids=None, centre_ids=None):
         from organisation.models import RegleOrganisationCentre
 
         queryset = RegleOrganisationCentre.objects.filter(
@@ -227,6 +227,8 @@ class CentreImmersionRepository:
         )
         if region_ids:
             queryset = queryset.filter(centre__region_id__in=_liste_ids(region_ids))
+        if centre_ids:
+            queryset = queryset.filter(centre_id__in=_liste_ids(centre_ids))
         return (
             queryset.values(region_id=models.F("centre__region_id"))
             .annotate(

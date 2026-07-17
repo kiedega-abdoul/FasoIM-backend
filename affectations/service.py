@@ -11,6 +11,8 @@ from django.utils import timezone
 
 from immerges.models import Immerge
 from immerges.repository import ImmergeRepository
+from sessions_app.models import SessionImmersion
+from sessions_app.service import ParametreSessionService
 
 from .models import (
     AffectationCentre,
@@ -260,11 +262,76 @@ class ProfilAffectationService:
         return profils, sans_source
 
 
+class PerimetreCentresSessionService:
+    """Expose les centres et régions explicitement retenus pour une session."""
+
+    @staticmethod
+    def session(session_id):
+        try:
+            return SessionImmersion.objects.select_related("parametres").get(
+                id=session_id, deleted_at__isnull=True
+            )
+        except SessionImmersion.DoesNotExist as exc:
+            raise ValidationAffectationErreur({
+                "session": "La session demandée est introuvable."
+            }) from exc
+
+    @classmethod
+    def centre_ids(cls, session_id):
+        session = cls.session(session_id)
+        ids = ParametreSessionService.ids_centres_accueil(session)
+        if not ids:
+            raise ValidationAffectationErreur({
+                "centres_accueil": (
+                    "Aucun centre d'accueil n'est configuré dans les paramètres "
+                    "de cette session."
+                )
+            })
+        return ids
+
+    @classmethod
+    def region_ids(cls, session_id):
+        centre_ids = cls.centre_ids(session_id)
+        regions = list(
+            CentreImmersionRepository.lister_donnees_algorithme()
+            .filter(id__in=centre_ids)
+            .values_list("region_id", flat=True)
+            .distinct()
+        )
+        if not regions:
+            raise ValidationAffectationErreur({
+                "regions": (
+                    "Les centres retenus pour la session ne fournissent aucune "
+                    "région active admissible."
+                )
+            })
+        return centre_ids, [int(region_id) for region_id in regions]
+
+    @classmethod
+    def verifier_region(cls, *, session_id, region_id):
+        _, region_ids = cls.region_ids(session_id)
+        if int(region_id) not in region_ids:
+            raise ValidationAffectationErreur({
+                "region": (
+                    "Cette région ne fait pas partie des régions déduites des "
+                    "centres retenus pour la session."
+                )
+            })
+
+    @classmethod
+    def verifier_centre(cls, *, session_id, centre_id):
+        if int(centre_id) not in cls.centre_ids(session_id):
+            raise ValidationAffectationErreur({
+                "centre": "Ce centre n'est pas retenu dans les paramètres de la session."
+            })
+
+
 class CapaciteAffectationService:
     """Interprète les agrégats bruts fournis par le repository."""
 
     @staticmethod
     def capacites_regions(session_id: int, region_ids: list[int]) -> dict[int, dict]:
+        centre_ids = PerimetreCentresSessionService.centre_ids(session_id)
         capacites = {
             int(ligne["region_id"]): {
                 "capacite_totale": int(ligne["capacite_ouverte_centres"] or 0),
@@ -274,7 +341,9 @@ class CapaciteAffectationService:
                 "disponible": int(ligne["capacite_ouverte_centres"] or 0),
             }
             for ligne in CentreImmersionRepository.capacites_ouvertes_par_region(
-                session_id=session_id, region_ids=region_ids
+                session_id=session_id,
+                region_ids=region_ids,
+                centre_ids=centre_ids,
             )
         }
 
@@ -501,13 +570,17 @@ class AffectationRegionaleService:
                 candidats_restants=total_avant,
             )
 
-        regions = list(RegionImmersionRepository.lister_donnees_algorithme())
+        centre_ids, region_ids = PerimetreCentresSessionService.region_ids(session_id)
+        regions = list(
+            RegionImmersionRepository.lister_donnees_algorithme().filter(
+                id__in=region_ids
+            )
+        )
         if not regions:
             raise ValidationAffectationErreur(
-                {"regions": "Aucune région active n'est disponible."}
+                {"regions": "Aucune région admissible n'est disponible pour la session."}
             )
 
-        region_ids = [int(region["id"]) for region in regions]
         # Tous les services d'affectation doivent verrouiller les mêmes lignes
         # régions avant de calculer les places disponibles.
         list(RegionImmersionRepository.verrouiller_par_ids(region_ids))
@@ -607,6 +680,9 @@ class AffectationRegionaleService:
                 {"immerge": "Cet immergé possède déjà une affectation régionale ouverte."}
             )
 
+        PerimetreCentresSessionService.verifier_region(
+            session_id=immerge.session_id, region_id=region_id
+        )
         region = RegionImmersionRepository.get_by_id_pour_update(region_id)
         if not region.est_active:
             raise ValidationAffectationErreur(
@@ -898,10 +974,11 @@ class AffectationCentreService:
                 candidats_restants=total_avant,
             )
 
+        centres_retenus = PerimetreCentresSessionService.centre_ids(session_id)
         centres = list(
             CentreImmersionRepository.lister_donnees_algorithme(
                 region_id=region_id
-            )
+            ).filter(id__in=centres_retenus)
         )
         if not centres:
             raise ValidationAffectationErreur(
@@ -1011,6 +1088,9 @@ class AffectationCentreService:
                 {"immerge": "Cet immergé possède déjà une affectation centre ouverte."}
             )
 
+        PerimetreCentresSessionService.verifier_centre(
+            session_id=affectation_regionale.session_id, centre_id=centre_id
+        )
         centre = CentreImmersionRepository.get_by_id_pour_update(centre_id)
         if centre.region_id != affectation_regionale.region_id:
             raise ValidationAffectationErreur(

@@ -252,6 +252,117 @@ class ParametreSessionService:
     CHAMPS_TEXTUELS_EN_COURS = {"directives_generales", "consignes_generales"}
 
     @staticmethod
+    def normaliser_centres_accueil(*, session, centres):
+        """Valide et photographie les centres retenus pour une session."""
+        if centres in (None, ""):
+            return []
+        if not isinstance(centres, list):
+            raise ValidationError({
+                "centres_accueil": "La sélection des centres doit être une liste."
+            })
+
+        from affectations.models import CentreImmersion
+        from organisation.models import RegleOrganisationCentre
+
+        ids = []
+        for index, ligne in enumerate(centres):
+            if not isinstance(ligne, dict):
+                raise ValidationError({
+                    "centres_accueil": (
+                        f"Le centre à la position {index + 1} doit être un objet."
+                    )
+                })
+            centre_id = ligne.get("centre_id", ligne.get("id"))
+            try:
+                centre_id = int(centre_id)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError({
+                    "centres_accueil": (
+                        f"L'identifiant du centre à la position {index + 1} est invalide."
+                    )
+                }) from exc
+            if centre_id in ids:
+                raise ValidationError({
+                    "centres_accueil": "Un même centre ne peut être sélectionné deux fois."
+                })
+            ids.append(centre_id)
+
+        centres_actifs = {
+            centre.id: centre
+            for centre in CentreImmersion.objects.filter(
+                id__in=ids,
+                deleted_at__isnull=True,
+                statut=CentreImmersion.Statut.ACTIF,
+                region__deleted_at__isnull=True,
+                region__statut="ACTIVE",
+            ).select_related("region")
+        }
+        manquants = sorted(set(ids) - set(centres_actifs))
+        if manquants:
+            raise ValidationError({
+                "centres_accueil": (
+                    "Certains centres sont introuvables, inactifs ou rattachés à une "
+                    f"région inactive : {manquants}."
+                )
+            })
+
+        if session is not None and ids:
+            regles = {
+                regle.centre_id: regle
+                for regle in RegleOrganisationCentre.objects.filter(
+                    session=session,
+                    centre_id__in=ids,
+                    deleted_at__isnull=True,
+                )
+            }
+            sans_regle = sorted(set(ids) - set(regles))
+            if sans_regle:
+                raise ValidationError({
+                    "centres_accueil": (
+                        "Chaque centre sélectionné doit déjà disposer d'une règle "
+                        "d'organisation pour cette session. Centres sans règle : "
+                        f"{sans_regle}."
+                    )
+                })
+            invalides = sorted(
+                centre_id
+                for centre_id, regle in regles.items()
+                if int(regle.capacite_ouverte or 0) <= 0
+            )
+            if invalides:
+                raise ValidationError({
+                    "centres_accueil": (
+                        "La capacité ouverte doit être strictement positive pour les "
+                        f"centres : {invalides}."
+                    )
+                })
+
+        return [
+            {
+                "centre_id": centre.id,
+                "centre_code": centre.code,
+                "centre_nom": centre.nom,
+            }
+            for centre in (centres_actifs[centre_id] for centre_id in ids)
+        ]
+
+    @staticmethod
+    def ids_centres_accueil(session):
+        parametres = getattr(session, "parametres", None)
+        if not parametres or parametres.deleted_at is not None:
+            return []
+        ids = []
+        for ligne in parametres.centres_accueil or []:
+            if not isinstance(ligne, dict):
+                continue
+            centre_id = ligne.get("centre_id", ligne.get("id"))
+            try:
+                ids.append(int(centre_id))
+            except (TypeError, ValueError):
+                continue
+        return list(dict.fromkeys(ids))
+
+    @staticmethod
     def verifier_parametres_non_supprimes(parametres):
         if parametres.deleted_at is not None:
             raise ValidationError("Ces paramètres sont supprimés logiquement.")
@@ -268,7 +379,12 @@ class ParametreSessionService:
             )
         if ParametreSession.objects.filter(session=session, deleted_at__isnull=True).exists():
             raise ValidationError("Les paramètres de cette session sont déjà configurés.")
-        parametres = ParametreSession(session=session, **dict(parametres_data or {}))
+        donnees = dict(parametres_data or {})
+        if "centres_accueil" in donnees:
+            donnees["centres_accueil"] = cls.normaliser_centres_accueil(
+                session=session, centres=donnees["centres_accueil"]
+            )
+        parametres = ParametreSession(session=session, **donnees)
         parametres.save()
         return parametres
 
@@ -281,6 +397,10 @@ class ParametreSessionService:
             donnees.pop(champ, None)
         session = parametres.session
         SessionImmersionService.verifier_session_modifiable(session)
+        if "centres_accueil" in donnees:
+            donnees["centres_accueil"] = cls.normaliser_centres_accueil(
+                session=session, centres=donnees["centres_accueil"]
+            )
         if session.statut == SessionImmersion.Statut.EN_COURS:
             interdits = set(donnees) - cls.CHAMPS_TEXTUELS_EN_COURS
             if interdits:

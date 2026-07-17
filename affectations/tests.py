@@ -8,7 +8,7 @@ from django.urls import resolve, reverse
 from rest_framework.test import APIClient
 
 from immerges.models import Immerge
-from sessions_app.models import SessionImmersion
+from sessions_app.models import ParametreSession, SessionImmersion
 from organisation.models import RegleOrganisationCentre
 
 from .models import (
@@ -177,6 +177,21 @@ class ModelesAffectationsTests(TestCase):
             seuil_division_groupes=20,
             capacite_max_groupe=20,
             statut=RegleOrganisationCentre.Statut.VALIDEE,
+        )
+        ParametreSession.objects.create(
+            session=session,
+            centres_accueil=[
+                {
+                    "centre_id": self.centre.id,
+                    "centre_code": self.centre.code,
+                    "centre_nom": self.centre.nom,
+                },
+                {
+                    "centre_id": centre_secondaire.id,
+                    "centre_code": centre_secondaire.code,
+                    "centre_nom": centre_secondaire.nom,
+                },
+            ],
         )
 
         capacites = CapaciteAffectationService.capacites_regions(

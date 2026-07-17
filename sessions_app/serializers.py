@@ -47,6 +47,11 @@ class ParametreSessionInputSerializer(serializers.Serializer):
         required=False,
         default=list,
     )
+    centres_accueil = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        default=list,
+    )
 
     def validate_documents_exiges(self, value):
         if not isinstance(value, list):
@@ -54,6 +59,19 @@ class ParametreSessionInputSerializer(serializers.Serializer):
                 "La liste des documents exigés doit être un tableau."
             )
         return value
+
+    def validate_centres_accueil(self, value):
+        session = None
+        if hasattr(self, "initial_data"):
+            session_id = self.initial_data.get("session")
+            if session_id:
+                session = SessionImmersion.objects.filter(
+                    id=session_id, deleted_at__isnull=True
+                ).first()
+        return ParametreSessionService.normaliser_centres_accueil(
+            session=session,
+            centres=value,
+        )
 
 
 class ParametreSessionSerializer(serializers.ModelSerializer):
@@ -79,6 +97,7 @@ class ParametreSessionSerializer(serializers.ModelSerializer):
             "directives_generales",
             "consignes_generales",
             "documents_exiges",
+            "centres_accueil",
             "utilise_import",
             "utilise_inscription_volontaire",        
         ]
@@ -95,6 +114,13 @@ class ParametreSessionSerializer(serializers.ModelSerializer):
                 "La liste des documents exigés doit être un tableau."
             )
         return value
+
+    def validate_centres_accueil(self, value):
+        session = getattr(self.instance, "session", None)
+        return ParametreSessionService.normaliser_centres_accueil(
+            session=session,
+            centres=value,
+        )
 
     def update(self, instance, validated_data):
         return ParametreSessionService.modifier_parametres(instance, validated_data)

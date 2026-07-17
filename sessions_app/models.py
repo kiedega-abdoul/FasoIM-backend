@@ -295,6 +295,14 @@ class ParametreSession(models.Model):
     directives_generales = models.TextField(blank=True)
     consignes_generales = models.TextField(blank=True)
     documents_exiges = models.JSONField(default=list, blank=True)
+    centres_accueil = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Photographie des centres retenus pour la session : "
+            "centre_id, centre_code et centre_nom."
+        ),
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
