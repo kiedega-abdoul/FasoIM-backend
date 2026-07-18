@@ -42,6 +42,7 @@ class ProfilAffectation:
     immerge_id: int
     origine_id: int
     type_immerge: str
+    identite_affichable: str = ""
     sexe: str = ""
     date_naissance: object | None = None
     region_reference: str = ""
@@ -194,6 +195,7 @@ class ProfilAffectationService:
                         immerge_id=immerge.id,
                         origine_id=immerge.origine_id,
                         type_immerge=immerge.type_immerge,
+                        identite_affichable=(source.get("nom_et_prenoms") or f"{source.get('nom') or ''} {source.get('prenoms') or ''}").strip(),
                         sexe=source.get("sexe") or "",
                         date_naissance=source.get("date_naissance"),
                         region_reference=source.get("region_examen") or "",
@@ -211,6 +213,7 @@ class ProfilAffectationService:
                         immerge_id=immerge.id,
                         origine_id=immerge.origine_id,
                         type_immerge=immerge.type_immerge,
+                        identite_affichable=(source.get("nom_et_prenoms") or f"{source.get('nom') or ''} {source.get('prenoms') or ''}").strip(),
                         sexe=source.get("sexe") or "",
                         date_naissance=source.get("date_naissance"),
                         region_reference=source.get("region_composition") or "",
@@ -226,6 +229,7 @@ class ProfilAffectationService:
                         immerge_id=immerge.id,
                         origine_id=immerge.origine_id,
                         type_immerge=immerge.type_immerge,
+                        identite_affichable=(source.get("nom_et_prenoms") or f"{source.get('nom') or ''} {source.get('prenoms') or ''}").strip(),
                         sexe=source.get("sexe") or "",
                         date_naissance=source.get("date_naissance"),
                         region_reference=source.get("region_structure") or "",
@@ -245,6 +249,7 @@ class ProfilAffectationService:
                         immerge_id=immerge.id,
                         origine_id=immerge.origine_id,
                         type_immerge=immerge.type_immerge,
+                        identite_affichable=(source.get("nom_et_prenoms") or f"{source.get('nom') or ''} {source.get('prenoms') or ''}").strip(),
                         sexe=source.get("sexe") or "",
                         date_naissance=source.get("date_naissance"),
                         region_reference=source.get("region_residence") or "",
@@ -337,6 +342,9 @@ class CapaciteAffectationService:
                 "capacite_totale": int(ligne["capacite_ouverte_centres"] or 0),
                 "capacite_ouverte": int(ligne["capacite_ouverte_centres"] or 0),
                 "nombre_centres": int(ligne["nombre_centres"] or 0),
+                "propositions_en_attente": 0,
+                "affectations_validees": 0,
+                "places_reservees": 0,
                 "occupation_ouverte": 0,
                 "disponible": int(ligne["capacite_ouverte_centres"] or 0),
             }
@@ -354,6 +362,9 @@ class CapaciteAffectationService:
                     "capacite_totale": 0,
                     "capacite_ouverte": 0,
                     "nombre_centres": 0,
+                    "propositions_en_attente": 0,
+                    "affectations_validees": 0,
+                    "places_reservees": 0,
                     "occupation_ouverte": 0,
                     "disponible": 0,
                 },
@@ -361,7 +372,7 @@ class CapaciteAffectationService:
 
         for ligne in AffectationRegionaleRepository.compter_par_region_et_statuts(
             session_id=session_id,
-            statuts=STATUTS_REGIONAUX_OUVERTS,
+            statuts=(AffectationRegionale.Statut.PROPOSEE,),
         ):
             region_id = int(ligne["region_id"])
             capacites.setdefault(
@@ -370,19 +381,139 @@ class CapaciteAffectationService:
                     "capacite_totale": 0,
                     "capacite_ouverte": 0,
                     "nombre_centres": 0,
+                    "propositions_en_attente": 0,
+                    "affectations_validees": 0,
+                    "places_reservees": 0,
                     "occupation_ouverte": 0,
                     "disponible": 0,
                 },
             )
-            capacites[region_id]["occupation_ouverte"] = int(ligne["total"] or 0)
+            capacites[region_id]["propositions_en_attente"] = int(ligne["total"] or 0)
+
+        for ligne in AffectationRegionaleRepository.compter_par_region_et_statuts(
+            session_id=session_id,
+            statuts=(AffectationRegionale.Statut.ACTIVE,),
+        ):
+            region_id = int(ligne["region_id"])
+            capacites.setdefault(
+                region_id,
+                {
+                    "capacite_totale": 0,
+                    "capacite_ouverte": 0,
+                    "nombre_centres": 0,
+                    "propositions_en_attente": 0,
+                    "affectations_validees": 0,
+                    "places_reservees": 0,
+                    "occupation_ouverte": 0,
+                    "disponible": 0,
+                },
+            )
+            capacites[region_id]["affectations_validees"] = int(ligne["total"] or 0)
 
         for donnees in capacites.values():
+            donnees["places_reservees"] = (
+                donnees["propositions_en_attente"]
+                + donnees["affectations_validees"]
+            )
+            # Compatibilité interne : l'occupation ouverte représente toutes les
+            # places déjà réservées, qu'elles soient proposées ou validées.
+            donnees["occupation_ouverte"] = donnees["places_reservees"]
             donnees["disponible"] = max(
                 0,
-                donnees["capacite_totale"] - donnees["occupation_ouverte"],
+                donnees["capacite_totale"] - donnees["places_reservees"],
             )
 
         return capacites
+
+
+    @classmethod
+    def rapport_regions(cls, session_id: int) -> dict:
+        session = PerimetreCentresSessionService.session(session_id)
+        centre_ids, region_ids = PerimetreCentresSessionService.region_ids(session_id)
+        capacites = cls.capacites_regions(session_id, region_ids)
+
+        centres = list(
+            CentreImmersionRepository.lister_donnees_algorithme(region_ids=region_ids)
+            .filter(id__in=centre_ids)
+            .order_by("region_id", "nom", "id")
+        )
+        capacites_centres = CentreImmersionRepository.capacites_ouvertes_par_centres(
+            session_id=session_id,
+            centre_ids=centre_ids,
+        )
+        regions = {
+            int(ligne["id"]): ligne
+            for ligne in RegionImmersionRepository.lister_donnees_algorithme()
+            if int(ligne["id"]) in set(region_ids)
+        }
+
+        centres_par_region: dict[int, list[dict]] = {int(region_id): [] for region_id in region_ids}
+        for centre in centres:
+            region_id = int(centre["region_id"])
+            centres_par_region.setdefault(region_id, []).append({
+                "centre_id": int(centre["id"]),
+                "centre_code": centre["code"],
+                "centre_nom": centre["nom"],
+                "province": centre.get("province") or "",
+                "ville": centre.get("ville") or "",
+                "capacite_ouverte": int(capacites_centres.get(int(centre["id"]), 0)),
+            })
+
+        lignes_regions = []
+        for region_id in region_ids:
+            region_id = int(region_id)
+            region = regions.get(region_id, {})
+            donnees = capacites.get(region_id, {})
+            lignes_regions.append({
+                "region_id": region_id,
+                "region_code": region.get("code", ""),
+                "region_nom": region.get("nom", ""),
+                "nombre_centres": int(donnees.get("nombre_centres", 0)),
+                "capacite_ouverte": int(donnees.get("capacite_ouverte", 0)),
+                "propositions_en_attente": int(donnees.get("propositions_en_attente", 0)),
+                "affectations_validees": int(donnees.get("affectations_validees", 0)),
+                "places_reservees": int(donnees.get("places_reservees", 0)),
+                "occupation": int(donnees.get("affectations_validees", 0)),
+                "disponible": int(donnees.get("disponible", 0)),
+                "centres": centres_par_region.get(region_id, []),
+            })
+
+        lignes_regions.sort(key=lambda ligne: (ligne["region_nom"], ligne["region_id"]))
+        candidats_disponibles = (
+            CriteresImmergeAffectationRepository.compter_candidats_regionaux(
+                session_id=session_id,
+            )
+        )
+        disponible_total = sum(ligne["disponible"] for ligne in lignes_regions)
+        return {
+            "session": {
+                "id": session.id,
+                "code": session.code,
+                "nom": session.nom,
+                "statut": session.statut,
+                "type_session": session.type_session,
+                "public_cible": session.public_cible,
+            },
+            "capacite_totale": sum(ligne["capacite_ouverte"] for ligne in lignes_regions),
+            "propositions_en_attente_total": sum(
+                ligne["propositions_en_attente"] for ligne in lignes_regions
+            ),
+            "affectations_validees_total": sum(
+                ligne["affectations_validees"] for ligne in lignes_regions
+            ),
+            "places_reservees_total": sum(
+                ligne["places_reservees"] for ligne in lignes_regions
+            ),
+            # Conservé pour les anciens clients : il représente désormais
+            # uniquement les affectations validées.
+            "occupation_totale": sum(
+                ligne["affectations_validees"] for ligne in lignes_regions
+            ),
+            "disponible_total": disponible_total,
+            "candidats_disponibles": candidats_disponibles,
+            "maximum_proposable": min(candidats_disponibles, disponible_total),
+            "regions": lignes_regions,
+        }
 
     @staticmethod
     def capacites_centres(
@@ -424,13 +555,104 @@ class CapaciteAffectationService:
         return capacites
 
 
+    @classmethod
+    def rapport_centres(cls, *, session_id: int, region_id: int) -> dict:
+        session = PerimetreCentresSessionService.session(session_id)
+        PerimetreCentresSessionService.verifier_region(
+            session_id=session_id,
+            region_id=region_id,
+        )
+        centre_ids = PerimetreCentresSessionService.centre_ids(session_id)
+        centres = list(
+            CentreImmersionRepository.lister_donnees_algorithme(region_id=region_id)
+            .filter(id__in=centre_ids)
+            .order_by("nom", "id")
+        )
+        capacites = cls.capacites_centres(
+            session_id=session_id,
+            centres=centres,
+            region_id=region_id,
+        )
+
+        propositions = {
+            int(ligne["centre_id"]): int(ligne["total"] or 0)
+            for ligne in AffectationCentreRepository.compter_par_centre_et_statuts(
+                session_id=session_id,
+                region_id=region_id,
+                statuts=(AffectationCentre.Statut.PROPOSEE,),
+            )
+        }
+        validees = {
+            int(ligne["centre_id"]): int(ligne["total"] or 0)
+            for ligne in AffectationCentreRepository.compter_par_centre_et_statuts(
+                session_id=session_id,
+                region_id=region_id,
+                statuts=(AffectationCentre.Statut.ACTIVE,),
+            )
+        }
+
+        lignes = []
+        for centre in centres:
+            centre_id = int(centre["id"])
+            capacite_ouverte = int(capacites.get(centre_id, {}).get("capacite_ouverte", 0))
+            en_attente = int(propositions.get(centre_id, 0))
+            actives = int(validees.get(centre_id, 0))
+            reservees = en_attente + actives
+            lignes.append({
+                "centre_id": centre_id,
+                "centre_code": centre.get("code", ""),
+                "centre_nom": centre.get("nom", ""),
+                "province": centre.get("province", ""),
+                "ville": centre.get("ville", ""),
+                "genre": centre.get("genre", ""),
+                "publics_acceptes": centre.get("publics_acceptes") or [],
+                "niveaux_acceptes": centre.get("niveaux_acceptes") or [],
+                "capacite_ouverte": capacite_ouverte,
+                "propositions_en_attente": en_attente,
+                "affectations_validees": actives,
+                "places_reservees": reservees,
+                "disponible": max(0, capacite_ouverte - reservees),
+            })
+
+        candidats_disponibles = (
+            CriteresImmergeAffectationRepository.compter_candidats_centre(
+                session_id=session_id,
+                region_id=region_id,
+            )
+        )
+        disponible_total = sum(ligne["disponible"] for ligne in lignes)
+        region = RegionImmersionRepository.get_by_id(region_id)
+        return {
+            "session": {
+                "id": session.id,
+                "code": session.code,
+                "nom": session.nom,
+                "statut": session.statut,
+                "type_session": session.type_session,
+                "public_cible": session.public_cible,
+            },
+            "region": {
+                "id": region.id,
+                "code": region.code,
+                "nom": region.nom,
+            },
+            "nombre_centres": len(lignes),
+            "capacite_totale": sum(ligne["capacite_ouverte"] for ligne in lignes),
+            "propositions_en_attente_total": sum(ligne["propositions_en_attente"] for ligne in lignes),
+            "affectations_validees_total": sum(ligne["affectations_validees"] for ligne in lignes),
+            "places_reservees_total": sum(ligne["places_reservees"] for ligne in lignes),
+            "disponible_total": disponible_total,
+            "candidats_disponibles": candidats_disponibles,
+            "maximum_proposable": min(candidats_disponibles, disponible_total),
+            "centres": lignes,
+        }
+
+
 class AffectationRegionaleService:
     """Propose, valide et rejette les affectations régionales."""
 
-    LIMITE_MAX_LOT = 1000
     SEUIL_CORRESPONDANCE_FORTE = 0.82
     SEUIL_CORRESPONDANCE_ASSOUPLIE = 0.55
-    SEUIL_RELIQUAT = 50
 
     @classmethod
     def valider_taille_lot(cls, nombre: int) -> int:
@@ -445,16 +667,21 @@ class AffectationRegionaleService:
             raise ValidationAffectationErreur(
                 {"nombre": "Le nombre demandé doit être strictement positif."}
             )
-        if nombre > cls.LIMITE_MAX_LOT:
-            raise ValidationAffectationErreur(
-                {
-                    "nombre": (
-                        f"Un lot ne peut pas dépasser {cls.LIMITE_MAX_LOT} "
-                        "immergés afin de rester vérifiable."
-                    )
-                }
-            )
         return nombre
+
+    @classmethod
+    def verifier_aucune_proposition_en_attente(cls, session_id: int) -> None:
+        total = AffectationRegionaleRepository.compter_propositions_en_attente(
+            session_id=session_id,
+        )
+        if total > 0:
+            raise ValidationAffectationErreur({
+                "propositions": (
+                    f"{total} proposition(s) régionale(s) sont encore en attente "
+                    "de validation. Validez-les ou rejetez-les avant de lancer "
+                    "une nouvelle proposition."
+                )
+            })
 
     @staticmethod
     def _classer_regions(
@@ -512,8 +739,8 @@ class AffectationRegionaleService:
             return meilleure_region, meilleur_score, "correspondance_assouplie"
 
         if forcer_reliquat:
-            # Quand le reliquat devient petit, le service doit trouver une
-            # région disponible même si le libellé source est imparfait.
+            # Ce mode n'est utilisé que lorsque l'acteur l'a explicitement
+            # demandé. Le backend ne doit jamais l'activer automatiquement.
             if meilleur_score > 0:
                 return meilleure_region, meilleur_score, "correspondance_assouplie"
 
@@ -543,6 +770,7 @@ class AffectationRegionaleService:
         forcer_reliquat: bool = False,
     ) -> ResultatPropositionLot:
         nombre = cls.valider_taille_lot(nombre)
+        cls.verifier_aucune_proposition_en_attente(session_id)
         total_avant = (
             CriteresImmergeAffectationRepository.compter_candidats_regionaux(
                 session_id=session_id,
@@ -595,7 +823,7 @@ class AffectationRegionaleService:
             )
 
         profils, sans_source = ProfilAffectationService.construire_profils(candidats)
-        reliquat = forcer_reliquat or total_avant <= cls.SEUIL_RELIQUAT
+        reliquat = bool(forcer_reliquat)
 
         propositions = []
         sans_destination = []
@@ -657,15 +885,19 @@ class AffectationRegionaleService:
     @transaction.atomic
     def proposer_manuellement(
         *,
-        immerge_id: int,
+        immerge_id: int | None = None,
+        code_fasoim: str | None = None,
         region_id: int,
         acteur=None,
         motif: str = "",
     ):
+        filtres = {}
+        if immerge_id is not None:
+            filtres["immerge_ids"] = [immerge_id]
+        if code_fasoim:
+            filtres["codes_fasoim"] = [str(code_fasoim).strip().upper()]
         immerge = (
-            CriteresImmergeAffectationRepository.filtrer_immerges(
-                immerge_ids=[immerge_id]
-            )
+            CriteresImmergeAffectationRepository.filtrer_immerges(**filtres)
             .select_for_update(of=("self",))
             .first()
         )
@@ -826,6 +1058,21 @@ class AffectationCentreService:
         return AffectationRegionaleService.valider_taille_lot(nombre)
 
     @staticmethod
+    def verifier_aucune_proposition_en_attente(*, session_id: int, region_id: int) -> None:
+        total = AffectationCentreRepository.compter_propositions_en_attente(
+            session_id=session_id,
+            region_id=region_id,
+        )
+        if total > 0:
+            raise ValidationAffectationErreur({
+                "propositions": (
+                    f"{total} proposition(s) vers les centres sont encore en attente "
+                    "de validation. Validez-les ou rejetez-les avant de lancer "
+                    "une nouvelle proposition."
+                )
+            })
+
+    @staticmethod
     def _genre_compatible(sexe: str, genre_centre: str) -> bool:
         sexe = str(sexe or "").strip().upper()
         genre = str(genre_centre or "").strip().upper()
@@ -945,6 +1192,10 @@ class AffectationCentreService:
         acteur=None,
     ) -> ResultatPropositionLot:
         nombre = cls.valider_taille_lot(nombre)
+        cls.verifier_aucune_proposition_en_attente(
+            session_id=session_id,
+            region_id=region_id,
+        )
         total_avant = (
             CriteresImmergeAffectationRepository.compter_candidats_centre(
                 session_id=session_id,
@@ -1067,11 +1318,26 @@ class AffectationCentreService:
     def proposer_manuellement(
         cls,
         *,
-        immerge_id: int,
         centre_id: int,
         acteur=None,
         motif: str = "",
+        immerge_id: int | None = None,
+        code_fasoim: str | None = None,
     ):
+        if code_fasoim:
+            try:
+                immerge_id = ImmergeRepository.get_par_code(
+                    str(code_fasoim).strip().upper()
+                ).id
+            except Immerge.DoesNotExist as exc:
+                raise ValidationAffectationErreur({
+                    "code_fasoim": "Aucun immergé ne correspond à ce Code FasoIM."
+                }) from exc
+        if not immerge_id:
+            raise ValidationAffectationErreur({
+                "immerge": "L'immergé à affecter est obligatoire."
+            })
+
         affectation_regionale = (
             AffectationRegionaleRepository.get_active_par_immerge_pour_update(
                 immerge_id

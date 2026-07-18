@@ -647,10 +647,34 @@ class AffectationRegionaleViewSet(AffectationsViewSetBase):
     def affecter_manuellement(self, request):
         return self.create(request)
 
+    @action(detail=False, methods=["get"], url_path="capacites")
+    def capacites(self, request):
+        session_id = request.query_params.get("session_id") or request.query_params.get("session")
+        region_id = request.query_params.get("region_id")
+        if not session_id:
+            raise ValidationError({"session_id": "La session est obligatoire."})
+        if not region_id:
+            raise ValidationError({"region_id": "La région est obligatoire."})
+        try:
+            donnees = CapaciteAffectationService.rapport_centres(
+                session_id=int(session_id),
+                region_id=int(region_id),
+            )
+        except (DjangoValidationError, ValidationAffectationErreur, ValueError) as exception:
+            lever_erreur_service(exception)
+        return Response(donnees)
+
     @action(detail=False, methods=["post"], url_path="proposer-lot")
     def proposer_lot(self, request):
         serializer = PropositionRegionaleLotInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        try:
+            AffectationRegionaleService.verifier_aucune_proposition_en_attente(
+                serializer.validated_data["session_id"],
+            )
+        except (DjangoValidationError, ValidationAffectationErreur) as exception:
+            lever_erreur_service(exception)
 
         return self.lancer_tache(
             proposer_affectations_regionales_task,
@@ -823,10 +847,34 @@ class AffectationCentreViewSet(AffectationsViewSetBase):
     def affecter_manuellement(self, request):
         return self.create(request)
 
+    @action(detail=False, methods=["get"], url_path="capacites")
+    def capacites(self, request):
+        session_id = request.query_params.get("session_id") or request.query_params.get("session")
+        region_id = request.query_params.get("region_id")
+        if not session_id:
+            raise ValidationError({"session_id": "La session est obligatoire."})
+        if not region_id:
+            raise ValidationError({"region_id": "La région est obligatoire."})
+        try:
+            donnees = CapaciteAffectationService.rapport_centres(
+                session_id=int(session_id),
+                region_id=int(region_id),
+            )
+        except (DjangoValidationError, ValidationAffectationErreur, ValueError) as exception:
+            lever_erreur_service(exception)
+        return Response(donnees)
+
     @action(detail=False, methods=["post"], url_path="proposer-lot")
     def proposer_lot(self, request):
         serializer = PropositionCentreLotInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        try:
+            AffectationCentreService.verifier_aucune_proposition_en_attente(
+                session_id=serializer.validated_data["session_id"],
+                region_id=serializer.validated_data["region_id"],
+            )
+        except (DjangoValidationError, ValidationAffectationErreur) as exception:
+            lever_erreur_service(exception)
 
         return self.lancer_tache(
             proposer_affectations_centres_task,

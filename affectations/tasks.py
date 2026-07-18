@@ -219,8 +219,18 @@ def proposer_affectations_regionales_task(
                 statut=ProgressionAffectationService.STATUT_TERMINEE,
                 progression=100,
                 message=(
-                    f"{resultat['propositions_creees']} proposition(s) "
-                    "régionale(s) prête(s) à vérifier."
+                    (
+                        "Aucune proposition régionale n’a été créée : aucune région "
+                        "d’accueil ne correspond suffisamment aux régions d’origine. "
+                        "Ajoutez des centres d’accueil dans les régions concernées ou "
+                        "relancez en choisissant « Répartir selon les places disponibles »."
+                    )
+                    if resultat["propositions_creees"] == 0
+                    and resultat["sans_destination"]
+                    else (
+                        f"{resultat['propositions_creees']} proposition(s) régionale(s) "
+                        "prête(s) à vérifier."
+                    )
                 ),
                 total=resultat["candidats_pris"],
                 traites=resultat["candidats_pris"],

@@ -198,6 +198,7 @@ class PermissionAffectationRegionale(PermissionAffectationsBase):
         "annuler": "annuler_affectation_regionale",
         "transferer": "modifier_affectation_regionale",
         "historique": "consulter_affectations_regionales",
+        "capacites": "consulter_affectations_regionales",
     }
 
 
@@ -219,6 +220,7 @@ class PermissionAffectationCentre(PermissionAffectationsBase):
         "transferer": "modifier_affectation_centre",
         "verifier_compatibilite": "verifier_compatibilite_centre",
         "historique": "consulter_affectations_centres",
+        "capacites": "consulter_affectations_centres",
     }
 
 

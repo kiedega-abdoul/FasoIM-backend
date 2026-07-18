@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from django.db import models
-from django.db.models import Count, Exists, OuterRef, Q, Sum, Value
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q, Sum, Value
 from django.db.models.functions import Coalesce
 
 from immerges.models import (
@@ -757,6 +757,12 @@ class AffectationRegionaleRepository:
         )
 
     @staticmethod
+    def compter_propositions_en_attente(*, session_id):
+        return AffectationRegionaleRepository.lister_proposees().filter(
+            session_id=session_id,
+        ).count()
+
+    @staticmethod
     def lister_ouvertes():
         return AffectationRegionaleRepository.actifs().filter(
             statut__in=STATUTS_REGIONAUX_OUVERTS,
@@ -973,13 +979,31 @@ class AffectationCentreRepository:
 
     @staticmethod
     def base_queryset():
-        return AffectationCentre.objects.select_related(
-            "immerge",
-            "session",
-            "affectation_regionale",
-            "centre",
-            "centre__region",
-            "affecte_par",
+        from organisation.models import AffectationGroupe, AttributionLit
+
+        return (
+            AffectationCentre.objects.select_related(
+                "immerge",
+                "session",
+                "affectation_regionale",
+                "centre",
+                "centre__region",
+                "affecte_par",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "affectations_groupes",
+                    queryset=AffectationGroupe.objects.filter(
+                        deleted_at__isnull=True,
+                    ).select_related("groupe", "groupe__section"),
+                ),
+                Prefetch(
+                    "attributions_lits",
+                    queryset=AttributionLit.objects.filter(
+                        deleted_at__isnull=True,
+                    ).select_related("lit", "lit__dortoir"),
+                ),
+            )
         )
 
     @staticmethod
@@ -1006,6 +1030,14 @@ class AffectationCentreRepository:
         return AffectationCentreRepository.actifs().filter(
             statut=AffectationCentre.Statut.PROPOSEE,
         )
+
+    @staticmethod
+    def compter_propositions_en_attente(*, session_id, region_id):
+        return AffectationCentreRepository.actifs().filter(
+            session_id=session_id,
+            centre__region_id=region_id,
+            statut=AffectationCentre.Statut.PROPOSEE,
+        ).count()
 
     @staticmethod
     def lister_ouvertes():

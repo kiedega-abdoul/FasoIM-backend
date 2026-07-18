@@ -1,8 +1,9 @@
-from django.db.models import Q
+from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
 
 from .models import (
@@ -316,14 +317,21 @@ class InscriptionVolontaireViewSet(viewsets.ModelViewSet):
             )
         return Response(ProgressionImmergeService.lire(identifiant))
 
+class ImmergePagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+
 class ImmergeViewSet(viewsets.ModelViewSet):
     serializer_class = ImmergeSerializer
     permission_classes = [PermissionImmergeCentral]
+    pagination_class = ImmergePagination
 
     def get_queryset(self):
         queryset = Immerge.objects.filter(deleted_at__isnull=True).select_related("session")
 
-        session = self.request.query_params.get("session")
+        session = self.request.query_params.get("session") or self.request.query_params.get("session_id")
         type_immerge = self.request.query_params.get("type_immerge")
         statut_immerge = self.request.query_params.get("statut")
         code_fasoim = self.request.query_params.get("code_fasoim")
@@ -447,10 +455,26 @@ class ImmergeViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="stats")
     def stats(self, request):
         queryset = self.get_queryset()
+        statuts_affectes = [
+            Immerge.Statut.AFFECTE_REGION,
+            Immerge.Statut.AFFECTE_CENTRE,
+            Immerge.Statut.EN_IMMERSION,
+            Immerge.Statut.LIBERE,
+        ]
         return Response(
             {
                 "total": queryset.count(),
-                "par_statut": list(queryset.values("statut").order_by("statut")),
-                "par_type": list(queryset.values("type_immerge").order_by("type_immerge")),
+                "codes_generes": queryset.exclude(code_fasoim="").count(),
+                "deja_affectes": queryset.filter(statut__in=statuts_affectes).count(),
+                "par_statut": list(
+                    queryset.values("statut")
+                    .annotate(total=Count("id"))
+                    .order_by("statut")
+                ),
+                "par_type": list(
+                    queryset.values("type_immerge")
+                    .annotate(total=Count("id"))
+                    .order_by("type_immerge")
+                ),
             }
         )

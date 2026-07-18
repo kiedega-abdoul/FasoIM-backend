@@ -300,11 +300,53 @@ class SourceResumeSerializer(serializers.Serializer):
     reference = serializers.CharField(required=False, allow_blank=True)
 
 
+class ImmergeListSerializer(serializers.ListSerializer):
+    """Charge les sources des immergés en lots pour éviter une requête SQL par ligne."""
+
+    def to_representation(self, data):
+        instances = list(data)
+        examen_ids = [
+            item.origine_id
+            for item in instances
+            if item.type_immerge in {Immerge.TypeImmerge.BEPC, Immerge.TypeImmerge.BAC}
+        ]
+        concours_ids = [
+            item.origine_id
+            for item in instances
+            if item.type_immerge == Immerge.TypeImmerge.CONCOURS
+        ]
+        selection_ids = [
+            item.origine_id
+            for item in instances
+            if item.type_immerge == Immerge.TypeImmerge.SELECTIONNE
+        ]
+        volontaire_ids = [
+            item.origine_id
+            for item in instances
+            if item.type_immerge == Immerge.TypeImmerge.VOLONTAIRE
+        ]
+
+        cache = {}
+        for source in ImmergeExamen.objects.filter(id__in=examen_ids, deleted_at__isnull=True):
+            cache[(Immerge.TypeImmerge.BEPC, source.id)] = source
+            cache[(Immerge.TypeImmerge.BAC, source.id)] = source
+        for source in ImmergeConcours.objects.filter(id__in=concours_ids, deleted_at__isnull=True):
+            cache[(Immerge.TypeImmerge.CONCOURS, source.id)] = source
+        for source in ImmergeSelectionne.objects.filter(id__in=selection_ids, deleted_at__isnull=True):
+            cache[(Immerge.TypeImmerge.SELECTIONNE, source.id)] = source
+        for source in InscriptionVolontaire.objects.filter(id__in=volontaire_ids, deleted_at__isnull=True):
+            cache[(Immerge.TypeImmerge.VOLONTAIRE, source.id)] = source
+
+        self.child.context["_source_cache"] = cache
+        return super().to_representation(instances)
+
+
 class ImmergeSerializer(serializers.ModelSerializer):
     source_resume = serializers.SerializerMethodField()
 
     class Meta:
         model = Immerge
+        list_serializer_class = ImmergeListSerializer
         fields = [
             "id",
             "session",
@@ -319,10 +361,13 @@ class ImmergeSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "code_fasoim", "qr_code", "date_creation_code", "source_resume"]
 
     def get_source_resume(self, obj):
-        try:
-            source = ImmergeSourceResolverService.recuperer(obj)
-        except Exception:
-            return None
+        cache = self.context.get("_source_cache")
+        source = cache.get((obj.type_immerge, obj.origine_id)) if cache is not None else None
+        if source is None:
+            try:
+                source = ImmergeSourceResolverService.recuperer(obj)
+            except Exception:
+                return None
         reference = ""
         for champ in ["numero_pv", "numero_recepisse", "matricule", "reference_selection", "code_suivi"]:
             valeur = getattr(source, champ, "")

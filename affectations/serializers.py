@@ -100,6 +100,7 @@ class ProfilAffectationSerializer(serializers.Serializer):
     immerge_id = serializers.IntegerField(read_only=True)
     origine_id = serializers.IntegerField(read_only=True)
     type_immerge = serializers.CharField(read_only=True)
+    identite_affichable = serializers.CharField(read_only=True, allow_blank=True)
     sexe = serializers.CharField(read_only=True, allow_blank=True)
     date_naissance = serializers.DateField(read_only=True, allow_null=True)
     region_reference = serializers.CharField(read_only=True, allow_blank=True)
@@ -394,6 +395,7 @@ class AffectationCentreSerializer(serializers.ModelSerializer):
     est_active = serializers.BooleanField(read_only=True)
     est_ouverte = serializers.BooleanField(read_only=True)
     profil_source = serializers.SerializerMethodField()
+    organisation_interne = serializers.SerializerMethodField()
 
     class Meta:
         model = AffectationCentre
@@ -411,6 +413,7 @@ class AffectationCentreSerializer(serializers.ModelSerializer):
             "est_active",
             "est_ouverte",
             "profil_source",
+            "organisation_interne",
         ]
         read_only_fields = fields
 
@@ -423,12 +426,34 @@ class AffectationCentreSerializer(serializers.ModelSerializer):
             return None
         return ProfilAffectationSerializer(profil).data
 
+    def get_organisation_interne(self, obj):
+        affectation_groupe = next((
+            ligne for ligne in obj.affectations_groupes.all()
+            if ligne.deleted_at is None and ligne.statut == "ACTIVE"
+        ), None)
+        attribution_lit = next((
+            ligne for ligne in obj.attributions_lits.all()
+            if ligne.deleted_at is None and ligne.statut == "ACTIVE"
+        ), None)
+
+        groupe = getattr(affectation_groupe, "groupe", None)
+        section = getattr(groupe, "section", None) if groupe is not None else None
+        lit = getattr(attribution_lit, "lit", None)
+        dortoir = getattr(lit, "dortoir", None) if lit is not None else None
+
+        return {
+            "section": ({"id": section.id, "nom": section.nom, "code": section.code} if section else None),
+            "groupe": ({"id": groupe.id, "nom": groupe.nom, "code": groupe.code} if groupe else None),
+            "dortoir": ({"id": dortoir.id, "nom": dortoir.nom} if dortoir else None),
+            "lit": ({"id": lit.id, "numero_lit": lit.numero_lit} if lit else None),
+        }
+
 
 class PropositionRegionaleLotInputSerializer(serializers.Serializer):
     """Demande de génération asynchrone d'un lot régional."""
 
     session_id = serializers.IntegerField(min_value=1)
-    nombre = serializers.IntegerField(min_value=1, max_value=1000)
+    nombre = serializers.IntegerField(min_value=1)
     forcer_reliquat = serializers.BooleanField(required=False, default=False)
 
 
@@ -437,11 +462,12 @@ class PropositionCentreLotInputSerializer(serializers.Serializer):
 
     session_id = serializers.IntegerField(min_value=1)
     region_id = serializers.IntegerField(min_value=1)
-    nombre = serializers.IntegerField(min_value=1, max_value=1000)
+    nombre = serializers.IntegerField(min_value=1)
 
 
 class AffectationRegionaleManuelleInputSerializer(serializers.Serializer):
-    immerge_id = serializers.IntegerField(min_value=1)
+    immerge_id = serializers.IntegerField(min_value=1, required=False)
+    code_fasoim = serializers.CharField(max_length=80, required=False, allow_blank=False)
     region_id = serializers.IntegerField(min_value=1)
     motif = serializers.CharField(
         required=False,
@@ -450,9 +476,22 @@ class AffectationRegionaleManuelleInputSerializer(serializers.Serializer):
         default="",
     )
 
+    def validate_code_fasoim(self, value):
+        return value.strip().upper()
+
+    def validate(self, attrs):
+        immerge_id = attrs.get("immerge_id")
+        code_fasoim = attrs.get("code_fasoim")
+        if bool(immerge_id) == bool(code_fasoim):
+            raise serializers.ValidationError(
+                "Indiquez soit le code FasoIM, soit l'identifiant de l'immergé."
+            )
+        return attrs
+
 
 class AffectationCentreManuelleInputSerializer(serializers.Serializer):
-    immerge_id = serializers.IntegerField(min_value=1)
+    immerge_id = serializers.IntegerField(min_value=1, required=False)
+    code_fasoim = serializers.CharField(max_length=80, required=False, allow_blank=False)
     centre_id = serializers.IntegerField(min_value=1)
     motif = serializers.CharField(
         required=False,
@@ -460,6 +499,18 @@ class AffectationCentreManuelleInputSerializer(serializers.Serializer):
         max_length=2000,
         default="",
     )
+
+    def validate_code_fasoim(self, value):
+        return value.strip().upper()
+
+    def validate(self, attrs):
+        immerge_id = attrs.get("immerge_id")
+        code_fasoim = attrs.get("code_fasoim")
+        if bool(immerge_id) == bool(code_fasoim):
+            raise serializers.ValidationError(
+                "Indiquez soit le code FasoIM, soit l'identifiant de l'immergé."
+            )
+        return attrs
 
 
 class ActionAffectationsLotInputSerializer(serializers.Serializer):

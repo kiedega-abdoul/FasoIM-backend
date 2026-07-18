@@ -26,6 +26,7 @@ from .permissions import (
 from .repository import (
     STATUTS_CENTRES_OUVERTS,
     STATUTS_REGIONAUX_OUVERTS,
+    AffectationRegionaleRepository,
     CentreImmersionRepository,
 )
 from .serializers import (
@@ -212,6 +213,81 @@ class ModelesAffectationsTests(TestCase):
             140,
         )
 
+    def test_capacites_distinguent_propositions_et_affectations_validees(self):
+        session = SessionImmersion.objects.create(
+            nom="Session distinction capacités 2026",
+            annee=2026,
+            numero_promotion=100,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=date(2026, 9, 1),
+            date_fin=date(2026, 9, 30),
+            statut=SessionImmersion.Statut.EN_PREPARATION,
+        )
+        RegleOrganisationCentre.objects.create(
+            session=session,
+            centre=self.centre,
+            capacite_ouverte=10,
+            seuil_division_sections=10,
+            capacite_max_section=10,
+            seuil_division_groupes=5,
+            capacite_max_groupe=5,
+            statut=RegleOrganisationCentre.Statut.VALIDEE,
+        )
+        ParametreSession.objects.create(
+            session=session,
+            centres_accueil=[
+                {
+                    "centre_id": self.centre.id,
+                    "centre_code": self.centre.code,
+                    "centre_nom": self.centre.nom,
+                }
+            ],
+        )
+        source = Immerge.objects.create(
+            session=session,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            origine_id=1,
+            code_fasoim="IP2026BAC9900001",
+            qr_code="qr-capacite-1",
+            statut=Immerge.Statut.CODE_GENERE,
+        )
+        AffectationRegionale.objects.create(
+            immerge=source,
+            session=session,
+            region=self.region,
+            statut=AffectationRegionale.Statut.PROPOSEE,
+        )
+        source_validee = Immerge.objects.create(
+            session=session,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            origine_id=2,
+            code_fasoim="IP2026BAC9900002",
+            qr_code="qr-capacite-2",
+            statut=Immerge.Statut.AFFECTE_REGION,
+        )
+        AffectationRegionale.objects.create(
+            immerge=source_validee,
+            session=session,
+            region=self.region,
+            statut=AffectationRegionale.Statut.ACTIVE,
+        )
+
+        rapport = CapaciteAffectationService.rapport_regions(session.id)
+        region = rapport["regions"][0]
+
+        self.assertEqual(rapport["session"]["type_session"], session.type_session)
+        self.assertEqual(rapport["session"]["public_cible"], session.public_cible)
+        self.assertEqual(rapport["propositions_en_attente_total"], 1)
+        self.assertEqual(rapport["affectations_validees_total"], 1)
+        self.assertEqual(rapport["places_reservees_total"], 2)
+        self.assertEqual(rapport["occupation_totale"], 1)
+        self.assertEqual(rapport["disponible_total"], 8)
+        self.assertEqual(region["propositions_en_attente"], 1)
+        self.assertEqual(region["affectations_validees"], 1)
+        self.assertEqual(region["places_reservees"], 2)
+        self.assertEqual(region["occupation"], 1)
+
     def test_proposition_regionale_peut_etre_validee(self):
         affectation = AffectationRegionale(
             statut=AffectationRegionale.Statut.PROPOSEE,
@@ -285,8 +361,10 @@ class AlgorithmesAffectationsTests(SimpleTestCase):
         with self.assertRaises(ValidationAffectationErreur):
             AffectationRegionaleService.valider_taille_lot(0)
 
-        with self.assertRaises(ValidationAffectationErreur):
-            AffectationRegionaleService.valider_taille_lot(1001)
+        self.assertEqual(
+            AffectationRegionaleService.valider_taille_lot(10000),
+            10000,
+        )
 
     def test_compatibilite_genre_centre(self):
         self.assertTrue(
@@ -352,6 +430,62 @@ class AlgorithmesAffectationsTests(SimpleTestCase):
         )
 
 
+class ReglesPropositionsRegionalesTests(SimpleTestCase):
+
+    def test_correspondance_faible_n_est_pas_proposee_sans_choix_explicite(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            region_reference="Nord",
+        )
+        regions = [{"id": 1, "nom": "Plateau central", "code": "PLATEAU_CENTRAL"}]
+        capacites = {1: {"disponible": 100}}
+
+        region, score, mode = AffectationRegionaleService._choisir_region(
+            profil=profil,
+            regions=regions,
+            capacites=capacites,
+            forcer_reliquat=False,
+        )
+
+        self.assertIsNone(region)
+        self.assertLess(score, AffectationRegionaleService.SEUIL_CORRESPONDANCE_ASSOUPLIE)
+        self.assertEqual(mode, "correspondance_insuffisante")
+
+    def test_correspondance_faible_est_proposee_seulement_si_acteur_force_reliquat(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            region_reference="Nord",
+        )
+        regions = [{"id": 1, "nom": "Plateau central", "code": "PLATEAU_CENTRAL"}]
+        capacites = {1: {"disponible": 100}}
+
+        region, score, mode = AffectationRegionaleService._choisir_region(
+            profil=profil,
+            regions=regions,
+            capacites=capacites,
+            forcer_reliquat=True,
+        )
+
+        self.assertEqual(region["id"], 1)
+        self.assertLess(score, AffectationRegionaleService.SEUIL_CORRESPONDANCE_ASSOUPLIE)
+        self.assertEqual(mode, "correspondance_assouplie")
+
+    def test_nouveau_lot_refuse_si_des_propositions_sont_en_attente(self):
+        with patch.object(
+            AffectationRegionaleRepository,
+            "compter_propositions_en_attente",
+            return_value=3,
+        ):
+            with self.assertRaises(ValidationAffectationErreur) as contexte:
+                AffectationRegionaleService.verifier_aucune_proposition_en_attente(1)
+
+        self.assertIn("propositions", contexte.exception.message_dict)
+
+
 class SerializersAffectationsTests(SimpleTestCase):
     def test_serializer_lot_regional_valide(self):
         serializer = PropositionRegionaleLotInputSerializer(
@@ -364,12 +498,36 @@ class SerializersAffectationsTests(SimpleTestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data["nombre"], 50)
 
-    def test_serializer_lot_refuse_plus_de_mille(self):
+
+    def test_serializer_lot_regional_accepte_dix_mille(self):
+        serializer = PropositionRegionaleLotInputSerializer(
+            data={
+                "session_id": 1,
+                "nombre": 10000,
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["nombre"], 10000)
+
+    def test_serializer_lot_centre_accepte_dix_mille(self):
         serializer = PropositionCentreLotInputSerializer(
             data={
                 "session_id": 1,
                 "region_id": 2,
-                "nombre": 1001,
+                "nombre": 10000,
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["nombre"], 10000)
+
+    def test_serializer_lot_centre_refuse_zero(self):
+        serializer = PropositionCentreLotInputSerializer(
+            data={
+                "session_id": 1,
+                "region_id": 2,
+                "nombre": 0,
             }
         )
 
