@@ -1201,6 +1201,69 @@ class HebergementService:
         )
         return attributions
 
+    @staticmethod
+    @transaction.atomic
+    def liberer_lits_fin_immersion(
+        *,
+        session_id: int,
+        centre_id: int,
+        observations: str = "",
+    ) -> dict:
+        """Libère les lits du centre à la fin de l'immersion.
+
+        Les dortoirs et les lits restent permanents. Seules les attributions
+        ouvertes de la session et du centre concernés sont traitées.
+        """
+        attributions_ouvertes = list(
+            AttributionLit.objects.select_for_update().filter(
+                affectation_centre__session_id=session_id,
+                affectation_centre__centre_id=centre_id,
+                affectation_centre__statut=AffectationCentre.Statut.ACTIVE,
+                affectation_centre__deleted_at__isnull=True,
+                statut__in=[
+                    AttributionLit.Statut.PROPOSEE,
+                    AttributionLit.Statut.ACTIVE,
+                    AttributionLit.Statut.A_REORGANISER,
+                ],
+                deleted_at__isnull=True,
+            ).order_by("id")
+        )
+
+        propositions = sum(
+            1
+            for attribution in attributions_ouvertes
+            if attribution.statut == AttributionLit.Statut.PROPOSEE
+        )
+        a_reorganiser = sum(
+            1
+            for attribution in attributions_ouvertes
+            if attribution.statut == AttributionLit.Statut.A_REORGANISER
+        )
+        if propositions or a_reorganiser:
+            raise ValidationOrganisationErreur({
+                "hebergement": (
+                    "La fin de l'immersion ne peut pas être confirmée tant que "
+                    "des propositions de lit ou des attributions à réorganiser "
+                    "restent ouvertes."
+                ),
+                "propositions_lits": propositions,
+                "lits_a_reorganiser": a_reorganiser,
+            })
+
+        motif = (
+            observations
+            or "Libération automatique à la fin de l'immersion du centre."
+        )
+        actives = [
+            attribution
+            for attribution in attributions_ouvertes
+            if attribution.statut == AttributionLit.Statut.ACTIVE
+        ]
+        for attribution in actives:
+            attribution.liberer(motif)
+
+        return {"lits_liberes": len(actives)}
+
 
 class VisiteMedicaleOrganisationService:
     """Applique les résultats médicaux à l'organisation déjà préparée."""

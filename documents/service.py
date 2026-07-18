@@ -63,6 +63,7 @@ from organisation.models import (
     AttributionLit,
     RegleOrganisationCentre,
 )
+from organisation.service import HebergementService
 from repas.models import DemandeRavitaillementCentre, RepasJournalier, SuiviRepas
 from repas.repository import RepasJournalierRepository
 from sante.models import VisiteMedicale
@@ -627,6 +628,34 @@ class CentreCertificationService:
             attendu = total * nb_articles
             if remises_finales < attendu:
                 blocages.append({"code": "REMISES_KITS_INCOMPLETES", "message": "Les remises de kits ne sont pas terminées.", "total": attendu - remises_finales})
+
+        if parametres.hebergement_active:
+            propositions_lits = AttributionLit.objects.filter(
+                affectation_centre__in=affectations,
+                statut=AttributionLit.Statut.PROPOSEE,
+                deleted_at__isnull=True,
+            ).count()
+            if propositions_lits:
+                blocages.append({
+                    "code": "PROPOSITIONS_LITS_EN_ATTENTE",
+                    "message": "Des propositions de lit restent à traiter.",
+                    "total": propositions_lits,
+                })
+
+            lits_a_reorganiser = AttributionLit.objects.filter(
+                affectation_centre__in=affectations,
+                statut=AttributionLit.Statut.A_REORGANISER,
+                deleted_at__isnull=True,
+            ).count()
+            if lits_a_reorganiser:
+                blocages.append({
+                    "code": "LITS_A_REORGANISER",
+                    "message": (
+                        "Des attributions de lit doivent encore être "
+                        "réorganisées."
+                    ),
+                    "total": lits_a_reorganiser,
+                })
 
         if parametres.repas_active:
             demandes = DemandeRavitaillementCentre.objects.filter(
@@ -1828,6 +1857,20 @@ class PublicationService:
         ).count()
         if docs != eligibles.count():
             raise ValidationDocumentsErreur("Toutes les attestations éligibles doivent être générées avant soumission.")
+
+        liberation_hebergement = {"lits_liberes": 0}
+        if session.parametres.hebergement_active:
+            liberation_hebergement = (
+                HebergementService.liberer_lits_fin_immersion(
+                    session_id=session.id,
+                    centre_id=centre.id,
+                    observations=(
+                        "Libération automatique lors de la finalisation "
+                        "de l'immersion du centre."
+                    ),
+                )
+            )
+
         publication = PublicationOfficielleRepository.get_centre_courante(
             session_id=session.id,
             centre_id=centre.id,
@@ -1846,7 +1889,10 @@ class PublicationService:
         publication.statut = PublicationOfficielle.Statut.SOUMISE_REGION
         publication.soumise_par = acteur
         publication.date_soumission = timezone.now()
-        publication.resume = ResultatFinalRepository.statistiques(resultats)
+        publication.resume = {
+            **ResultatFinalRepository.statistiques(resultats),
+            "hebergement": liberation_hebergement,
+        }
         publication.save()
         resultats.update(statut=ResultatFinal.Statut.SOUMIS_REGION, updated_at=timezone.now())
         JournalActionService.journaliser_succes(

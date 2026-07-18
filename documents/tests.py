@@ -22,7 +22,15 @@ from affectations.models import (
 )
 from imports_app.models import ImportOfficiel
 from immerges.models import Immerge, ImmergeSelectionne
-from organisation.models import AffectationGroupe, Groupe, RegleOrganisationCentre, Section
+from organisation.models import (
+    AffectationGroupe,
+    AttributionLit,
+    Dortoir,
+    Groupe,
+    Lit,
+    RegleOrganisationCentre,
+    Section,
+)
 from sessions_app.models import ParametreSession, SessionImmersion
 from sessions_app.service import SessionImmersionService
 
@@ -30,6 +38,7 @@ from .models import DocumentGenere, PublicationOfficielle, ResultatFinal
 from .service import (
     AttestationPubliqueService,
     AttestationService,
+    CentreCertificationService,
     EligibiliteAttestationService,
     GenerationFichierService,
     IdentiteImmergeService,
@@ -423,6 +432,96 @@ class DocumentsTests(TestCase):
         self.assertEqual(premier["generes"], 1)
         self.assertEqual(second["deja_generes"], 1)
         self.assertEqual(DocumentGenere.objects.filter(type_document=DocumentGenere.TypeDocument.ATTESTATION).count(), 1)
+
+    def test_soumission_attestations_libere_les_lits_du_centre(self):
+        self.parametres.hebergement_active = True
+        self.parametres.save(
+            update_fields=["hebergement_active", "updated_at"]
+        )
+        dortoir = Dortoir.objects.create(
+            centre=self.centre,
+            nom="Dortoir test",
+            capacite=1,
+            sexe_dortoir=Dortoir.SexeDortoir.FEMININ,
+        )
+        lit = Lit.objects.create(
+            dortoir=dortoir,
+            numero_lit="01",
+        )
+        attribution = AttributionLit.objects.create(
+            affectation_centre=self.affectation,
+            lit=lit,
+            statut=AttributionLit.Statut.ACTIVE,
+            attribue_par=self.acteur,
+        )
+        ResultatFinal.objects.create(
+            session=self.session,
+            region=self.region,
+            centre=self.centre,
+            affectation_centre=self.affectation,
+            immerge=self.immerge,
+            decision=ResultatFinal.Decision.NON_ELIGIBLE,
+            statut=ResultatFinal.Statut.VALIDE_CENTRE,
+        )
+
+        publication = PublicationService.soumettre_attestations_centre(
+            session_id=self.session.id,
+            centre_id=self.centre.id,
+            acteur=self.acteur,
+        )
+
+        attribution.refresh_from_db()
+        self.assertEqual(
+            attribution.statut,
+            AttributionLit.Statut.LIBEREE,
+        )
+        self.assertIsNotNone(attribution.date_liberation)
+        self.assertIsNotNone(attribution.deleted_at)
+        self.assertEqual(
+            publication.resume["hebergement"]["lits_liberes"],
+            1,
+        )
+        self.assertFalse(
+            AttributionLit.objects.filter(
+                lit=lit,
+                statut__in=[
+                    AttributionLit.Statut.PROPOSEE,
+                    AttributionLit.Statut.ACTIVE,
+                    AttributionLit.Statut.A_REORGANISER,
+                ],
+                deleted_at__isnull=True,
+            ).exists()
+        )
+
+    def test_finalisation_signale_les_lits_a_reorganiser(self):
+        self.parametres.hebergement_active = True
+        self.parametres.save(
+            update_fields=["hebergement_active", "updated_at"]
+        )
+        dortoir = Dortoir.objects.create(
+            centre=self.centre,
+            nom="Dortoir à revoir",
+            capacite=1,
+            sexe_dortoir=Dortoir.SexeDortoir.FEMININ,
+        )
+        lit = Lit.objects.create(
+            dortoir=dortoir,
+            numero_lit="01",
+        )
+        AttributionLit.objects.create(
+            affectation_centre=self.affectation,
+            lit=lit,
+            statut=AttributionLit.Statut.A_REORGANISER,
+            attribue_par=self.acteur,
+        )
+
+        etat = CentreCertificationService.verifier(
+            session=self.session,
+            centre=self.centre,
+        )
+
+        codes = {blocage["code"] for blocage in etat["blocages"]}
+        self.assertIn("LITS_A_REORGANISER", codes)
 
     def test_cycle_complet_attestation_signature_publication_verification(self):
         document = self.cycle_attestation_jusqua_publication()
