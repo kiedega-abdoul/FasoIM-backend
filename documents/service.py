@@ -657,46 +657,8 @@ class CentreCertificationService:
                     "total": lits_a_reorganiser,
                 })
 
-        if parametres.repas_active:
-            demandes = DemandeRavitaillementCentre.objects.filter(
-                session=session, centre=centre, deleted_at__isnull=True
-            )
-            if not demandes.exists():
-                blocages.append({
-                    "code": "RAVITAILLEMENT_ABSENT",
-                    "message": "Aucune demande de ravitaillement n'est enregistrée pour le centre.",
-                })
-            demandes_non_finales = demandes.exclude(
-                statut__in=[
-                    DemandeRavitaillementCentre.Statut.RECUE,
-                    DemandeRavitaillementCentre.Statut.ANNULEE,
-                ]
-            ).count()
-            if demandes_non_finales:
-                blocages.append({
-                    "code": "RAVITAILLEMENT_NON_TERMINE",
-                    "message": "Des demandes de ravitaillement ne sont pas terminées.",
-                    "total": demandes_non_finales,
-                })
-            repas = RepasJournalier.objects.filter(
-                demande_ravitaillement__session=session,
-                demande_ravitaillement__centre=centre,
-                deleted_at__isnull=True,
-            )
-            if not repas.exists():
-                blocages.append({
-                    "code": "REPAS_NON_PLANIFIES",
-                    "message": "Aucun repas journalier n'est enregistré pour le centre.",
-                })
-            repas_non_clotures = repas.exclude(
-                statut__in=[RepasJournalier.Statut.CLOTURE, RepasJournalier.Statut.ANNULE]
-            ).count()
-            if repas_non_clotures:
-                blocages.append({
-                    "code": "REPAS_NON_CLOTURES",
-                    "message": "Des repas journaliers ne sont pas clôturés.",
-                    "total": repas_non_clotures,
-                })
+        # Le suivi de l'alimentation reste opérationnel et traçable,
+        # mais il ne bloque jamais la finalisation du centre.
 
         incidents = AlerteIncident.objects.filter(
             session=session,
@@ -1792,29 +1754,36 @@ class PublicationService:
                 version=version,
                 preparee_par=acteur,
             )
-        publication.statut = PublicationOfficielle.Statut.SOUMISE_REGION
+        maintenant = timezone.now()
+        publication.statut = PublicationOfficielle.Statut.PUBLIEE
         publication.soumise_par = acteur
-        publication.date_soumission = timezone.now()
+        publication.publiee_par = acteur
+        publication.date_soumission = maintenant
+        publication.date_publication = maintenant
         publication.motif_correction = ""
         publication.resume = cls._resume_arrivee(session, centre)
         publication.save()
+
+        immerge_ids = list(
+            AffectationCentre.objects.filter(
+                session=session,
+                centre=centre,
+                statut=AffectationCentre.Statut.ACTIVE,
+                deleted_at__isnull=True,
+            ).values_list("immerge_id", flat=True)
+        )
+        NotificationService.planifier_affectations_publiees(
+            immerge_ids=immerge_ids,
+            publication_reference=publication.reference,
+            region_id=centre.region_id,
+            centre_id=centre.id,
+        )
         JournalActionService.journaliser_succes(
             acteur=acteur, session=session, region=centre.region, centre=centre,
-            code_action="soumettre_informations_arrivee", module_source="documents",
-            objet=publication, motif="Informations avant l'arrivée soumises à la région.",
+            code_action="publier_informations_arrivee_centre", module_source="documents",
+            objet=publication,
+            motif="Informations avant l'arrivée publiées directement par le Responsable de centre.",
             contexte=publication.resume,
-        )
-        NotificationService.planifier_acteurs_role(
-            code_role="DIRECTEUR_REGIONAL",
-            sujet="Informations d'arrivée à contrôler",
-            message=(
-                f"Le centre {centre.nom} a soumis ses informations d'arrivée "
-                f"pour la session {session.nom}."
-            ),
-            type_message=TypesMessage.ORGANISATION_PRETE,
-            cle_evenement=f"ARRIVEE_SOUMISE:{publication.reference}",
-            session_id=session.id, region_code=centre.region.code, centre_id=centre.id,
-            contexte={"publication_reference": publication.reference},
         )
         return publication
 

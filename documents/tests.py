@@ -13,7 +13,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Acteur, Permission, RolePermission
-from activites.models import Evaluation, ModuleActivite, Note, Presence, Seance
+from activites.models import Evaluation, Note, Presence, Seance
 from affectations.models import (
     AffectationCentre,
     AffectationRegionale,
@@ -222,15 +222,6 @@ class DocumentsTests(TestCase):
                 centre_id=self.centre.id,
                 acteur=self.acteur,
             )
-            PublicationService.valider_region(
-                publication_id=publication.id,
-                acteur=self.acteur,
-            )
-            PublicationService.publier_session(
-                session_id=self.session.id,
-                type_publication=PublicationOfficielle.TypePublication.INFORMATIONS_ARRIVEE,
-                acteur=self.acteur,
-            )
         publication.refresh_from_db()
         return publication
 
@@ -238,14 +229,8 @@ class DocumentsTests(TestCase):
         self.parametres.activites_active = True
         self.parametres.evaluation_active = True
         self.parametres.save(update_fields=["activites_active", "evaluation_active", "updated_at"])
-        module = ModuleActivite.objects.create(
-            titre="Civisme",
-            code=f"DOC-CIV-{self.session.id}",
-            categorie=ModuleActivite.Categorie.CIVISME,
-            duree_prevue=90,
-        )
         seance = Seance.objects.create(
-            module_activite=module,
+            titre="Évaluation finale",
             type_seance=Seance.TypeSeance.EVALUATION,
             session=self.session,
             centre=self.centre,
@@ -329,6 +314,13 @@ class DocumentsTests(TestCase):
     def test_arrivee_non_consultable_avant_publication(self):
         with self.assertRaises(ValidationDocumentsErreur):
             InformationsArriveeService.construire(self.immerge, journaliser=False)
+
+    def test_responsable_centre_publie_directement_les_informations_arrivee(self):
+        publication = self.publier_arrivee()
+        self.assertEqual(publication.statut, PublicationOfficielle.Statut.PUBLIEE)
+        self.assertEqual(publication.publiee_par, self.acteur)
+        self.assertIsNotNone(publication.date_publication)
+        self.assertIsNone(publication.validee_region_par)
 
     def test_cycle_publication_arrivee_et_consultation(self):
         self.publier_arrivee()
@@ -522,6 +514,23 @@ class DocumentsTests(TestCase):
 
         codes = {blocage["code"] for blocage in etat["blocages"]}
         self.assertIn("LITS_A_REORGANISER", codes)
+
+    def test_alimentation_ne_bloque_pas_la_finalisation_du_centre(self):
+        self.parametres.repas_active = True
+        self.parametres.save(
+            update_fields=["repas_active", "updated_at"]
+        )
+
+        etat = CentreCertificationService.verifier(
+            session=self.session,
+            centre=self.centre,
+        )
+
+        codes = {blocage["code"] for blocage in etat["blocages"]}
+        self.assertNotIn("RAVITAILLEMENT_ABSENT", codes)
+        self.assertNotIn("RAVITAILLEMENT_NON_TERMINE", codes)
+        self.assertNotIn("REPAS_NON_PLANIFIES", codes)
+        self.assertNotIn("REPAS_NON_CLOTURES", codes)
 
     def test_cycle_complet_attestation_signature_publication_verification(self):
         document = self.cycle_attestation_jusqua_publication()
