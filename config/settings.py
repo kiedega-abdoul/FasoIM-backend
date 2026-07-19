@@ -206,6 +206,12 @@ DOCUMENTS_PUBLIC_RATE_LIMIT = config("DOCUMENTS_PUBLIC_RATE_LIMIT", default=20, 
 DOCUMENTS_PUBLIC_RATE_WINDOW_SECONDS = config("DOCUMENTS_PUBLIC_RATE_WINDOW_SECONDS", default=900, cast=int)
 DOCUMENTS_PROGRESS_TTL_SECONDS = config("DOCUMENTS_PROGRESS_TTL_SECONDS", default=86400, cast=int)
 DOCUMENTS_DETECTION_READY_MINUTES = config("DOCUMENTS_DETECTION_READY_MINUTES", default=10, cast=int)
+FASOIM_ATTESTATION_ARMOIRIES_PATH = config(
+    "FASOIM_ATTESTATION_ARMOIRIES_PATH", default=""
+)
+FASOIM_ATTESTATION_LOGO_PATH = config(
+    "FASOIM_ATTESTATION_LOGO_PATH", default=""
+)
 
 # Surveillance automatique des alertes et incidents
 # Celery Beat doit être lancé séparément. Les tâches restent sans effet sur les

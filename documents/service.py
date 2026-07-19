@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import io
@@ -19,6 +20,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.template.loader import render_to_string
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from openpyxl import Workbook
@@ -29,9 +31,10 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from weasyprint import HTML
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from accounts.models import Acteur, AffectationActeur, AffectationRole, Role
+from accounts.models import Acteur, AffectationActeur, AffectationRole
 from accounts.service import ControleAccesService
 from activites.models import Evaluation, Note, Presence, Seance
 from activites.repository import (
@@ -1067,70 +1070,87 @@ class GenerationFichierService:
             and cls._image_reader(getattr(signataire, "cachet_image", None))
         )
 
+    @staticmethod
+    def _champ_en_data_uri(champ):
+        if not champ:
+            return ""
+        try:
+            champ.open("rb")
+            contenu = champ.read()
+            champ.close()
+            if not contenu:
+                return ""
+            type_mime = mimetypes.guess_type(getattr(champ, "name", ""))[0] or "image/png"
+            return f"data:{type_mime};base64,{base64.b64encode(contenu).decode('ascii')}"
+        except (ValueError, OSError, FileNotFoundError, NotImplementedError):
+            return ""
+
+    @staticmethod
+    def _fichier_en_data_uri(chemin, *, type_mime="image/png"):
+        if not chemin:
+            return ""
+        try:
+            with open(chemin, "rb") as fichier:
+                contenu = fichier.read()
+            if not contenu:
+                return ""
+            mime = mimetypes.guess_type(str(chemin))[0] or type_mime
+            return f"data:{mime};base64,{base64.b64encode(contenu).decode('ascii')}"
+        except (OSError, ValueError, TypeError):
+            return ""
+
+    @staticmethod
+    def _libelle_identifiant_origine(type_immerge):
+        return {
+            Immerge.TypeImmerge.BEPC: "Numéro PV BEPC",
+            Immerge.TypeImmerge.BAC: "Numéro PV BAC",
+            Immerge.TypeImmerge.CONCOURS: "Numéro de récépissé",
+            Immerge.TypeImmerge.SELECTIONNE: "Matricule / référence",
+            Immerge.TypeImmerge.VOLONTAIRE: "Code de suivi",
+        }.get(type_immerge, "Identifiant d'origine")
+
     @classmethod
     def pdf_attestation(cls, *, resultat, document, signataire=None):
+        """Génère une attestation institutionnelle A4 paysage depuis HTML/CSS."""
         identite = IdentiteImmergeService.donnees(resultat.immerge)
-        sortie = io.BytesIO()
-        largeur, hauteur = landscape(A4)
-        c = canvas.Canvas(sortie, pagesize=(largeur, hauteur))
-        c.setTitle(document.titre)
-        c.setLineWidth(2)
-        c.rect(1.2 * cm, 1.2 * cm, largeur - 2.4 * cm, hauteur - 2.4 * cm)
-        c.setFont("Helvetica-Bold", 22)
-        c.drawCentredString(largeur / 2, hauteur - 3.1 * cm, "ATTESTATION DE PARTICIPATION")
-        c.setFont("Helvetica", 12)
-        c.drawCentredString(largeur / 2, hauteur - 4.0 * cm, "Programme FasoIM - Immersion patriotique")
-
-        c.setFont("Helvetica", 13)
-        y = hauteur - 6.0 * cm
-        lignes = [
-            "Il est attesté que :",
-            f"{identite['nom_complet']}",
-            f"Code FasoIM : {resultat.immerge.code_fasoim}",
-            f"a participé à la session « {resultat.session.nom} »",
-            f"au centre {resultat.centre.nom}, du {resultat.session.date_debut:%d/%m/%Y} au {resultat.session.date_fin:%d/%m/%Y}.",
-            f"Taux de présence : {resultat.taux_presence}% (seuil : {resultat.seuil_presence}%).",
-        ]
-        if resultat.evaluation_active:
-            lignes.append(
-                f"Moyenne obtenue : {resultat.moyenne_sur_20}/20 (seuil : {resultat.seuil_moyenne_sur_20}/20)."
-            )
-        for index, ligne in enumerate(lignes):
-            if index == 1:
-                c.setFont("Helvetica-Bold", 17)
-                c.drawCentredString(largeur / 2, y, ligne)
-                c.setFont("Helvetica", 13)
-            else:
-                c.drawCentredString(largeur / 2, y, ligne)
-            y -= 0.75 * cm
-
-        verification_url = f"{getattr(settings, 'FASOIM_PUBLIC_URL', 'http://127.0.0.1:3000').rstrip('/')}/verifier-attestation/{document.code_verification}"
+        verification_url = (
+            f"{getattr(settings, 'FASOIM_PUBLIC_URL', 'http://127.0.0.1:3000').rstrip('/')}"
+            f"/verifier-attestation/{document.code_verification}"
+        )
         qr = cls.qr_bytes(verification_url)
-        c.drawImage(ImageReader(io.BytesIO(qr)), 2.2 * cm, 2.0 * cm, width=3.2 * cm, height=3.2 * cm, preserveAspectRatio=True, mask="auto")
-        c.setFont("Helvetica", 7)
-        c.drawString(1.8 * cm, 1.6 * cm, f"Vérification : {document.code_verification}")
-        c.drawRightString(largeur - 1.8 * cm, 1.6 * cm, f"N° {document.numero_document}")
-
-        if signataire:
-            c.setFont("Helvetica", 10)
-            c.drawCentredString(largeur - 5.0 * cm, 5.1 * cm, "Le signataire autorisé")
-            signature = cls._image_reader(signataire.signature_image)
-            cachet = cls._image_reader(signataire.cachet_image)
-            if signature:
-                c.drawImage(signature, largeur - 7.0 * cm, 2.6 * cm, width=4.0 * cm, height=1.8 * cm, preserveAspectRatio=True, mask="auto")
-            if cachet:
-                c.drawImage(cachet, largeur - 4.3 * cm, 2.3 * cm, width=2.2 * cm, height=2.2 * cm, preserveAspectRatio=True, mask="auto")
-            c.setFont("Helvetica-Bold", 10)
-            c.drawCentredString(largeur - 5.0 * cm, 2.0 * cm, signataire.nom_complet or signataire.username)
-            c.setFont("Helvetica", 9)
-            c.drawCentredString(largeur - 5.0 * cm, 1.55 * cm, signataire.titre or "Autorité signataire")
-        else:
-            c.setFont("Helvetica-Oblique", 9)
-            c.drawCentredString(largeur - 5.0 * cm, 2.4 * cm, "Document en attente de signature")
-
-        c.showPage()
-        c.save()
-        return sortie.getvalue(), qr
+        contexte = {
+            "document": document,
+            "resultat": resultat,
+            "immerge": resultat.immerge,
+            "identite": identite,
+            "identifiant_origine_libelle": cls._libelle_identifiant_origine(
+                resultat.immerge.type_immerge
+            ),
+            "qr_data_uri": f"data:image/png;base64,{base64.b64encode(qr).decode('ascii')}",
+            "verification_url": verification_url,
+            "signataire": signataire,
+            "signature_data_uri": (
+                cls._champ_en_data_uri(getattr(signataire, "signature_image", None))
+                if signataire else ""
+            ),
+            "cachet_data_uri": (
+                cls._champ_en_data_uri(getattr(signataire, "cachet_image", None))
+                if signataire else ""
+            ),
+            "armoiries_data_uri": cls._fichier_en_data_uri(
+                getattr(settings, "FASOIM_ATTESTATION_ARMOIRIES_PATH", "")
+            ),
+            "logo_data_uri": cls._fichier_en_data_uri(
+                getattr(settings, "FASOIM_ATTESTATION_LOGO_PATH", "")
+            ),
+            "date_delivrance": timezone.localdate(),
+        }
+        html = render_to_string("documents/attestation.html", contexte)
+        pdf = HTML(
+            string=html,
+            base_url=str(getattr(settings, "BASE_DIR", "")),
+        ).write_pdf()
+        return pdf, qr
 
     @classmethod
     def pdf_rapport(cls, *, titre, sections):
@@ -1406,35 +1426,6 @@ class WorkflowAutomatiqueAttestationService:
     """Prépare automatiquement les attestations, puis attend la validation régionale."""
 
     @staticmethod
-    def _directeur_regional(*, session, region):
-        qs = Acteur.objects.filter(
-            statut=Acteur.Statut.ACTIF,
-            is_active=True,
-            deleted_at__isnull=True,
-            affectations__statut=AffectationActeur.Statut.ACTIVE,
-            affectations__deleted_at__isnull=True,
-            affectations__session=session,
-            affectations__niveau_affectation=AffectationActeur.NiveauAffectation.REGION,
-            affectations__region_code=region.code,
-            affectations__roles_affectes__statut=AffectationRole.Statut.ACTIF,
-            affectations__roles_affectes__deleted_at__isnull=True,
-            affectations__roles_affectes__role__code="DIRECTEUR_REGIONAL",
-            affectations__roles_affectes__role__statut=Role.Statut.ACTIF,
-            affectations__roles_affectes__role__deleted_at__isnull=True,
-        ).distinct()
-        total = qs.count()
-        if total != 1:
-            raise ValidationDocumentsErreur(
-                f"La région {region.nom} doit avoir exactement un Directeur régional actif pour cette session."
-            )
-        directeur = qs.get()
-        if not GenerationFichierService.images_signataire_disponibles(directeur):
-            raise ValidationDocumentsErreur(
-                f"La signature et le cachet du Directeur régional de {region.nom} sont obligatoires."
-            )
-        return directeur
-
-    @staticmethod
     def _acteur_systeme():
         acteur = Acteur.objects.filter(
             is_superuser=True,
@@ -1456,7 +1447,6 @@ class WorkflowAutomatiqueAttestationService:
             return {"prepare": False, "centre_id": centre.id, "blocages": etat["blocages"]}
 
         acteur_systeme = cls._acteur_systeme()
-        directeur = cls._directeur_regional(session=session, region=centre.region)
 
         EligibiliteAttestationService.calculer_centre(
             session_id=session.id,
@@ -1486,35 +1476,20 @@ class WorkflowAutomatiqueAttestationService:
             acteur=acteur_systeme,
         )
 
-        documents = list(DocumentGenere.objects.select_for_update().select_related(
-            "resultat_final", "immerge"
-        ).filter(
+        documents = DocumentGenere.objects.filter(
             session=session,
             centre=centre,
             type_document=DocumentGenere.TypeDocument.ATTESTATION,
             resultat_final__decision=ResultatFinal.Decision.ELIGIBLE,
+            statut=DocumentGenere.Statut.GENERE,
             deleted_at__isnull=True,
-        ))
-        for document in documents:
-            pdf, _qr = GenerationFichierService.pdf_attestation(
-                resultat=document.resultat_final,
-                document=document,
-                signataire=directeur,
-            )
-            document.signataire = directeur
-            document.nom_signataire_snapshot = directeur.nom_complet or directeur.username
-            document.fonction_signataire_snapshot = directeur.titre
-            document.organisation_signataire_snapshot = directeur.organisation
-            document.signature_appliquee = True
-            document.cachet_applique = True
-            document.date_signature = maintenant
-            document.statut = DocumentGenere.Statut.SIGNE
-            GenerationFichierService.enregistrer(document, pdf, extension="pdf")
+        )
 
         publication.statut = PublicationOfficielle.Statut.SOUMISE_REGION
         publication.resume = {
             **(publication.resume or {}),
-            "attestations_signees": len(documents),
+            "attestations_generees": documents.count(),
+            "attestations_signees": 0,
             "validation_regionale_requise": True,
         }
         publication.save(update_fields=["statut", "resume", "updated_at"])
@@ -1522,8 +1497,8 @@ class WorkflowAutomatiqueAttestationService:
             code_role="DIRECTEUR_REGIONAL",
             sujet="Attestations prêtes à valider",
             message=(
-                f"Les attestations du centre {centre.nom} ont été calculées, générées et signées. "
-                "Elles attendent votre validation avant publication."
+                f"Les attestations du centre {centre.nom} ont été calculées et générées. "
+                "Elles attendent votre vérification, votre signature et leur publication."
             ),
             type_message=getattr(TypesMessage, "ATTESTATIONS_SOUMISES_REGION", "ATTESTATIONS_SOUMISES_REGION"),
             cle_evenement=f"ATTESTATIONS_A_VALIDER:{publication.reference}",
@@ -1536,7 +1511,7 @@ class WorkflowAutomatiqueAttestationService:
             "prepare": True,
             "centre_id": centre.id,
             "publication_id": publication.id,
-            "attestations_signees": len(documents),
+            "attestations_generees": documents.count(),
         }
 
     @classmethod
@@ -1568,13 +1543,23 @@ class WorkflowAutomatiqueAttestationService:
         ).exists():
             raise ValidationDocumentsErreur("Seul le Directeur régional de ce périmètre peut valider ces attestations.")
 
-        documents = DocumentGenere.objects.select_for_update().filter(
-            publication__isnull=True,
-            session=publication.session,
-            centre=publication.centre,
-            type_document=DocumentGenere.TypeDocument.ATTESTATION,
-            statut=DocumentGenere.Statut.SIGNE,
-            deleted_at__isnull=True,
+        if not GenerationFichierService.images_signataire_disponibles(acteur):
+            raise ValidationDocumentsErreur(
+                "La signature et le cachet du Directeur régional sont obligatoires avant publication."
+            )
+
+        documents = list(
+            DocumentGenere.objects.select_for_update(of=("self",)).select_related(
+                "resultat_final", "immerge"
+            ).filter(
+                publication__isnull=True,
+                session=publication.session,
+                centre=publication.centre,
+                type_document=DocumentGenere.TypeDocument.ATTESTATION,
+                statut=DocumentGenere.Statut.GENERE,
+                resultat_final__decision=ResultatFinal.Decision.ELIGIBLE,
+                deleted_at__isnull=True,
+            )
         )
         attendus = ResultatFinal.objects.filter(
             session=publication.session,
@@ -1582,17 +1567,30 @@ class WorkflowAutomatiqueAttestationService:
             decision=ResultatFinal.Decision.ELIGIBLE,
             deleted_at__isnull=True,
         ).count()
-        if documents.count() != attendus:
-            raise ValidationDocumentsErreur("Toutes les attestations éligibles doivent être signées avant validation.")
+        if len(documents) != attendus:
+            raise ValidationDocumentsErreur(
+                "Toutes les attestations éligibles doivent être générées avant validation."
+            )
 
         maintenant = timezone.now()
-        documents.update(
-            statut=DocumentGenere.Statut.PUBLIE,
-            visibilite=DocumentGenere.Visibilite.PUBLIC_VERIFICATION,
-            publication=publication,
-            date_publication=maintenant,
-            updated_at=maintenant,
-        )
+        for document in documents:
+            pdf, _qr = GenerationFichierService.pdf_attestation(
+                resultat=document.resultat_final,
+                document=document,
+                signataire=acteur,
+            )
+            document.signataire = acteur
+            document.nom_signataire_snapshot = acteur.nom_complet or acteur.username
+            document.fonction_signataire_snapshot = acteur.titre
+            document.organisation_signataire_snapshot = acteur.organisation
+            document.signature_appliquee = True
+            document.cachet_applique = True
+            document.date_signature = maintenant
+            document.statut = DocumentGenere.Statut.PUBLIE
+            document.visibilite = DocumentGenere.Visibilite.PUBLIC_VERIFICATION
+            document.publication = publication
+            document.date_publication = maintenant
+            GenerationFichierService.enregistrer(document, pdf, extension="pdf")
         ResultatFinal.objects.filter(
             session=publication.session,
             centre=publication.centre,
@@ -1609,6 +1607,11 @@ class WorkflowAutomatiqueAttestationService:
         publication.publiee_par = acteur
         publication.date_validation_region = maintenant
         publication.date_publication = maintenant
+        publication.resume = {
+            **(publication.resume or {}),
+            "attestations_signees": attendus,
+            "attestations_publiees": attendus,
+        }
         publication.save()
         immerge_ids = list(ResultatFinal.objects.filter(
             session=publication.session,

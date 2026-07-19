@@ -12,7 +12,14 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from accounts.models import Acteur, Permission, RolePermission
+from accounts.models import (
+    Acteur,
+    AffectationActeur,
+    AffectationRole,
+    Permission,
+    Role,
+    RolePermission,
+)
 from activites.models import Evaluation, Note, Presence, Seance
 from affectations.models import (
     AffectationCentre,
@@ -47,6 +54,7 @@ from .service import (
     RapportService,
     SessionClotureService,
     ValidationDocumentsErreur,
+    WorkflowAutomatiqueAttestationService,
 )
 
 
@@ -215,6 +223,31 @@ class DocumentsTests(TestCase):
             affecte_par=self.acteur,
         )
 
+    def affecter_directeur_regional(self):
+        role, _ = Role.objects.get_or_create(
+            code="DIRECTEUR_REGIONAL",
+            defaults={
+                "libelle": "Directeur régional",
+                "niveau": 30,
+                "perimetre_autorise": Role.Perimetre.REGION,
+                "statut": Role.Statut.ACTIF,
+            },
+        )
+        affectation = AffectationActeur.objects.create(
+            acteur=self.acteur,
+            session=self.session,
+            niveau_affectation=AffectationActeur.NiveauAffectation.REGION,
+            region_code=self.region.code,
+            statut=AffectationActeur.Statut.ACTIVE,
+            affecte_par=self.acteur,
+        )
+        AffectationRole.objects.create(
+            affectation_acteur=affectation,
+            role=role,
+            statut=AffectationRole.Statut.ACTIF,
+            attribue_par=self.acteur,
+        )
+
     def publier_arrivee(self):
         with patch.object(NotificationServiceProxy, "noop", return_value=None):
             publication = PublicationService.soumettre_arrivee_centre(
@@ -338,6 +371,56 @@ class DocumentsTests(TestCase):
             date_naissance=date(2005, 1, 2),
         )
         self.assertEqual(resultat.id, self.immerge.id)
+
+    def test_validation_regionale_signe_et_publie_les_attestations_generees(self):
+        self.affecter_directeur_regional()
+        self.publier_arrivee()
+        EligibiliteAttestationService.calculer_centre(
+            session_id=self.session.id,
+            centre_id=self.centre.id,
+            acteur=self.acteur,
+        )
+        EligibiliteAttestationService.valider_centre(
+            session_id=self.session.id,
+            centre_id=self.centre.id,
+            acteur=self.acteur,
+        )
+        AttestationService.generer_centre(
+            session_id=self.session.id,
+            centre_id=self.centre.id,
+            acteur=self.acteur,
+        )
+        publication = PublicationService.soumettre_attestations_centre(
+            session_id=self.session.id,
+            centre_id=self.centre.id,
+            acteur=self.acteur,
+        )
+        document = DocumentGenere.objects.get(
+            type_document=DocumentGenere.TypeDocument.ATTESTATION
+        )
+        self.assertEqual(document.statut, DocumentGenere.Statut.GENERE)
+        self.assertIsNone(document.signataire)
+        self.assertFalse(document.signature_appliquee)
+        self.assertFalse(document.cachet_applique)
+
+        resultat = WorkflowAutomatiqueAttestationService.valider_et_publier(
+            publication_id=publication.id,
+            acteur=self.acteur,
+        )
+
+        document.refresh_from_db()
+        publication.refresh_from_db()
+        resultat_final = ResultatFinal.objects.get(immerge=self.immerge)
+        self.assertEqual(resultat["publiees"], 1)
+        self.assertEqual(document.statut, DocumentGenere.Statut.PUBLIE)
+        self.assertEqual(document.signataire, self.acteur)
+        self.assertTrue(document.signature_appliquee)
+        self.assertTrue(document.cachet_applique)
+        self.assertEqual(document.publication, publication)
+        self.assertEqual(publication.statut, PublicationOfficielle.Statut.PUBLIEE)
+        self.assertEqual(publication.validee_region_par, self.acteur)
+        self.assertEqual(publication.publiee_par, self.acteur)
+        self.assertEqual(resultat_final.statut, ResultatFinal.Statut.PUBLIE)
 
     def test_valider_region_refuse_un_lot_attestations_non_signe(self):
         resultat = ResultatFinal.objects.create(

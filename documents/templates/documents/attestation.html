@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>{{ document.numero_document }}</title>
+<style>
+@page { size: A4 landscape; margin: 0; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "DejaVu Sans", Arial, sans-serif; color: #14213d; background: #fff; }
+.page { position: relative; width: 297mm; height: 210mm; padding: 13mm 16mm; overflow: hidden; }
+.frame { position: absolute; inset: 6mm; border: 2.2mm solid #007a3d; }
+.frame:before { content: ""; position: absolute; inset: 2.5mm; border: 1mm solid #fcd116; }
+.frame:after { content: ""; position: absolute; inset: 5mm; border: .8mm solid #ce1126; }
+.content { position: relative; height: 100%; z-index: 2; }
+.header { display: grid; grid-template-columns: 42mm 1fr 42mm; align-items: center; min-height: 36mm; }
+.emblem, .logo { width: 28mm; height: 28mm; object-fit: contain; justify-self: center; }
+.placeholder { width: 28mm; height: 28mm; border: .5mm solid #007a3d; border-radius: 50%; display: grid; place-items: center; font-size: 7pt; text-align: center; color: #007a3d; justify-self: center; }
+.country { text-align: center; font-weight: 700; font-size: 10pt; letter-spacing: .6pt; }
+.motto { text-align: center; font-size: 8.5pt; margin-top: 2mm; }
+.title { text-align: center; margin-top: 2mm; }
+.title h1 { margin: 0; color: #007a3d; font-family: Georgia, serif; font-size: 25pt; letter-spacing: 1.2pt; }
+.title .rule { width: 95mm; height: 1mm; margin: 2mm auto 0; background: linear-gradient(90deg,#007a3d 0 33%,#fcd116 33% 66%,#ce1126 66%); }
+.number { position: absolute; top: 37mm; right: 17mm; font-size: 8.5pt; font-weight: 700; }
+.body { width: 225mm; margin: 5mm auto 0; text-align: center; font-family: Georgia, serif; }
+.intro { font-size: 12.5pt; line-height: 1.55; margin: 0; }
+.name { font-size: 20pt; color: #007a3d; font-weight: 700; margin: 4mm 0 2mm; text-transform: uppercase; }
+.identifiers { display: inline-grid; grid-template-columns: auto auto; gap: 1.5mm 8mm; font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.5pt; text-align: left; background: #f7faf8; border-left: 1.5mm solid #fcd116; padding: 2.5mm 4mm; margin-bottom: 3mm; }
+.text { font-size: 11pt; line-height: 1.55; margin: 2mm 0; }
+.metrics { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.5pt; margin-top: 2mm; color: #354052; }
+.footer { position: absolute; left: 17mm; right: 17mm; bottom: 14mm; display: grid; grid-template-columns: 48mm 1fr 72mm; align-items: end; }
+.qr { width: 28mm; height: 28mm; object-fit: contain; }
+.verify { font-size: 6.5pt; line-height: 1.3; overflow-wrap: anywhere; margin-top: 1mm; }
+.issue { align-self: end; text-align: center; font-family: Georgia, serif; font-size: 9pt; padding-bottom: 4mm; }
+.signing { position: relative; min-height: 39mm; text-align: center; font-size: 8pt; }
+.signature { width: 44mm; height: 16mm; object-fit: contain; position: absolute; top: 8mm; left: 4mm; z-index: 2; }
+.stamp { width: 26mm; height: 26mm; object-fit: contain; position: absolute; top: 8mm; right: 3mm; opacity: .88; z-index: 1; }
+.signer-name { position: absolute; left: 0; right: 0; bottom: 5mm; font-weight: 700; z-index: 3; }
+.signer-title { position: absolute; left: 0; right: 0; bottom: 0; font-size: 7pt; z-index: 3; }
+.pending { border: .5mm dashed #999; padding: 6mm 3mm; color: #777; font-style: italic; margin-top: 8mm; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="header">
+      {% if armoiries_data_uri %}<img class="emblem" src="{{ armoiries_data_uri }}">{% else %}<div class="placeholder">ARMOIRIES<br>BURKINA FASO</div>{% endif %}
+      <div>
+        <div class="country">BURKINA FASO</div>
+        <div class="motto">Unité – Progrès – Justice</div>
+        <div class="title"><h1>ATTESTATION DE PARTICIPATION</h1><div class="rule"></div></div>
+      </div>
+      {% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% else %}<div class="placeholder">FASOIM<br>IMMERSION<br>PATRIOTIQUE</div>{% endif %}
+    </div>
+
+    <div class="number">N° {{ document.numero_document }}</div>
+
+    <div class="body">
+      <p class="intro">Le Directeur régional chargé de l’immersion patriotique atteste que :</p>
+      <div class="name">{{ identite.nom_complet }}</div>
+      <div class="identifiers">
+        <strong>Code FasoIM</strong><span>{{ immerge.code_fasoim }}</span>
+        <strong>{{ identifiant_origine_libelle }}</strong><span>{{ identite.identifiant_origine|default:"Non renseigné" }}</span>
+      </div>
+      <p class="text">a effectivement participé à la session <strong>{{ resultat.session.nom }}</strong> de l’Immersion patriotique, organisée au <strong>{{ resultat.centre.nom }}</strong>, dans la région <strong>{{ resultat.region.nom }}</strong>, du <strong>{{ resultat.session.date_debut|date:"d/m/Y" }}</strong> au <strong>{{ resultat.session.date_fin|date:"d/m/Y" }}</strong>.</p>
+      <p class="text">En foi de quoi, la présente attestation lui est délivrée pour servir et valoir ce que de droit.</p>
+      <div class="metrics">Taux de présence : <strong>{{ resultat.taux_presence }} %</strong>{% if resultat.evaluation_active %} &nbsp;•&nbsp; Moyenne : <strong>{{ resultat.moyenne_sur_20 }}/20</strong>{% endif %}</div>
+    </div>
+
+    <div class="footer">
+      <div><img class="qr" src="{{ qr_data_uri }}"><div class="verify">Vérification : {{ document.code_verification }}</div></div>
+      <div class="issue">Fait le {{ date_delivrance|date:"d/m/Y" }}</div>
+      <div class="signing">
+        {% if signataire %}
+          <div>Le Directeur régional</div>
+          {% if signature_data_uri %}<img class="signature" src="{{ signature_data_uri }}">{% endif %}
+          {% if cachet_data_uri %}<img class="stamp" src="{{ cachet_data_uri }}">{% endif %}
+          <div class="signer-name">{{ signataire.nom_complet|default:signataire.username }}</div>
+          <div class="signer-title">{{ signataire.titre|default:"Directeur régional" }}</div>
+        {% else %}
+          <div class="pending">En attente de validation et de signature régionale</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
