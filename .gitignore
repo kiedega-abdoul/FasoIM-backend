@@ -49,3 +49,6 @@ __pycache__/
 media/
 staticfiles/
 celerybeat-schedule*
+
+backend-zip/
+backend-zip.zip
