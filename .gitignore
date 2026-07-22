@@ -58,3 +58,7 @@ backend-zip.zip
 *.backup_*
 *.json.backup
 sauvegarde_avant_reinitialisation.json
+
+# Ancienne copie locale du backend
+/backend-test/
+/backend-test.zip
