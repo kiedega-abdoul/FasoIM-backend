@@ -407,11 +407,16 @@ class AffectationActeurViewSet(mixins.DestroyModelMixin, AccountsReadCreateViewS
     http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
-        queryset = AffectationActeurRepository.non_supprimes().exclude(
-            statut__in=[
-                AffectationActeur.Statut.TERMINEE,
-                AffectationActeur.Statut.ANNULEE,
-            ]
+        queryset = (
+            AffectationActeurRepository.non_supprimes()
+            .exclude(
+                statut__in=[
+                    AffectationActeur.Statut.TERMINEE,
+                    AffectationActeur.Statut.ANNULEE,
+                ]
+            )
+            .select_related("acteur", "session")
+            .prefetch_related("roles_affectes__role")
         )
 
         acteur_id = self.request.query_params.get("acteur_id") or self.request.query_params.get("acteur")

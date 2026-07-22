@@ -300,6 +300,7 @@ class PerimetreCentresSessionService:
         regions = list(
             CentreImmersionRepository.lister_donnees_algorithme()
             .filter(id__in=centre_ids)
+            .order_by()
             .values_list("region_id", flat=True)
             .distinct()
         )
@@ -310,7 +311,7 @@ class PerimetreCentresSessionService:
                     "région active admissible."
                 )
             })
-        return centre_ids, [int(region_id) for region_id in regions]
+        return centre_ids, sorted({int(region_id) for region_id in regions})
 
     @classmethod
     def verifier_region(cls, *, session_id, region_id):
@@ -336,6 +337,8 @@ class CapaciteAffectationService:
 
     @staticmethod
     def capacites_regions(session_id: int, region_ids: list[int]) -> dict[int, dict]:
+        region_ids = sorted({int(region_id) for region_id in region_ids})
+        region_ids_set = set(region_ids)
         centre_ids = PerimetreCentresSessionService.centre_ids(session_id)
         capacites = {
             int(ligne["region_id"]): {
@@ -375,6 +378,8 @@ class CapaciteAffectationService:
             statuts=(AffectationRegionale.Statut.PROPOSEE,),
         ):
             region_id = int(ligne["region_id"])
+            if region_id not in region_ids_set:
+                continue
             capacites.setdefault(
                 region_id,
                 {
@@ -395,6 +400,8 @@ class CapaciteAffectationService:
             statuts=(AffectationRegionale.Statut.ACTIVE,),
         ):
             region_id = int(ligne["region_id"])
+            if region_id not in region_ids_set:
+                continue
             capacites.setdefault(
                 region_id,
                 {
@@ -520,7 +527,7 @@ class CapaciteAffectationService:
         *,
         session_id: int,
         centres: list[dict],
-        region_id: int,
+        region_id: int | None = None,
     ) -> dict[int, dict]:
         centre_ids = [int(centre["id"]) for centre in centres]
         ouvertes = CentreImmersionRepository.capacites_ouvertes_par_centres(
@@ -684,6 +691,89 @@ class AffectationRegionaleService:
             })
 
     @staticmethod
+    def _centres_par_region(centres: list[dict]) -> dict[int, list[dict]]:
+        resultat: dict[int, list[dict]] = {}
+        for centre in centres:
+            resultat.setdefault(int(centre["region_id"]), []).append(centre)
+        return resultat
+
+    @staticmethod
+    def _centre_compatible_disponible(
+        *,
+        profil: ProfilAffectation,
+        centres: list[dict],
+        capacites_centres: dict[int, dict],
+    ) -> dict | None:
+        """Choisit une place réelle compatible sans tenir compte de la série.
+
+        Les centres dédiés au sexe du candidat sont consommés avant les centres
+        mixtes afin de préserver ces derniers pour les candidats qui n'ont pas
+        d'autre solution.
+        """
+
+        compatibles = []
+        for centre in centres:
+            centre_id = int(centre["id"])
+            disponible = int(
+                capacites_centres.get(centre_id, {}).get("disponible", 0)
+            )
+            if disponible <= 0:
+                continue
+            if not AffectationCentreService._genre_compatible(
+                profil.sexe, centre.get("genre")
+            ):
+                continue
+            if not AffectationCentreService._public_compatible(
+                profil.type_immerge, centre.get("publics_acceptes")
+            ):
+                continue
+
+            genre = str(centre.get("genre") or "").strip().upper()
+            priorite_genre = (
+                1 if genre != CentreImmersion.Genre.MIXTE else 0
+            )
+            compatibles.append(
+                (priorite_genre, disponible, -centre_id, centre)
+            )
+
+        if not compatibles:
+            return None
+        compatibles.sort(reverse=True)
+        return compatibles[0][3]
+
+    @classmethod
+    def _capacites_regionales_compatibles(
+        cls,
+        *,
+        profil: ProfilAffectation,
+        regions: list[dict],
+        centres_par_region: dict[int, list[dict]],
+        capacites_centres: dict[int, dict],
+    ) -> dict[int, dict]:
+        resultat: dict[int, dict] = {}
+        for region in regions:
+            region_id = int(region["id"])
+            total = 0
+            for centre in centres_par_region.get(region_id, []):
+                centre_id = int(centre["id"])
+                disponible = int(
+                    capacites_centres.get(centre_id, {}).get("disponible", 0)
+                )
+                if disponible <= 0:
+                    continue
+                if not AffectationCentreService._genre_compatible(
+                    profil.sexe, centre.get("genre")
+                ):
+                    continue
+                if not AffectationCentreService._public_compatible(
+                    profil.type_immerge, centre.get("publics_acceptes")
+                ):
+                    continue
+                total += disponible
+            resultat[region_id] = {"disponible": total}
+        return resultat
+
+    @staticmethod
     def _classer_regions(
         *,
         profil: ProfilAffectation,
@@ -822,6 +912,44 @@ class AffectationRegionaleService:
                 {"capacite": "Aucune place régionale n'est disponible."}
             )
 
+        centres = list(
+            CentreImmersionRepository.lister_donnees_algorithme(
+                region_ids=region_ids
+            ).filter(id__in=centre_ids)
+        )
+        centre_ids_algorithme = [int(centre["id"]) for centre in centres]
+        list(CentreImmersionRepository.verrouiller_par_ids(centre_ids_algorithme))
+        capacites_centres = CapaciteAffectationService.capacites_centres(
+            session_id=session_id,
+            centres=centres,
+        )
+        centres_par_region = cls._centres_par_region(centres)
+
+        # Les affectations régionales déjà validées, mais pas encore placées
+        # dans un centre, consomment aussi une place compatible. On les réserve
+        # d'abord afin qu'un nouveau lot DGAS ne puisse pas surcharger une
+        # région par sexe ou par public.
+        existantes = list(
+            AffectationRegionaleRepository.lister_actives_sans_centre(
+                session_id=session_id,
+                region_ids=region_ids,
+            )
+        )
+        profils_existants, _ = ProfilAffectationService.construire_profils(
+            [affectation.immerge for affectation in existantes]
+        )
+        for affectation in existantes:
+            profil_existant = profils_existants.get(affectation.immerge_id)
+            if profil_existant is None:
+                continue
+            centre_reserve = cls._centre_compatible_disponible(
+                profil=profil_existant,
+                centres=centres_par_region.get(affectation.region_id, []),
+                capacites_centres=capacites_centres,
+            )
+            if centre_reserve is not None:
+                capacites_centres[int(centre_reserve["id"])]["disponible"] -= 1
+
         profils, sans_source = ProfilAffectationService.construire_profils(candidats)
         reliquat = bool(forcer_reliquat)
 
@@ -834,10 +962,16 @@ class AffectationRegionaleService:
             if profil is None:
                 continue
 
+            capacites_compatibles = cls._capacites_regionales_compatibles(
+                profil=profil,
+                regions=regions,
+                centres_par_region=centres_par_region,
+                capacites_centres=capacites_centres,
+            )
             region, score, mode = cls._choisir_region(
                 profil=profil,
                 regions=regions,
-                capacites=capacites,
+                capacites=capacites_compatibles,
                 forcer_reliquat=reliquat,
             )
             if region is None:
@@ -845,6 +979,14 @@ class AffectationRegionaleService:
                 continue
 
             region_id = int(region["id"])
+            centre_reserve = cls._centre_compatible_disponible(
+                profil=profil,
+                centres=centres_par_region.get(region_id, []),
+                capacites_centres=capacites_centres,
+            )
+            if centre_reserve is None:
+                sans_destination.append(immerge.id)
+                continue
             motif = (
                 "Proposition automatique régionale"
                 f" | région source={profil.region_reference or 'non renseignée'}"
@@ -862,6 +1004,7 @@ class AffectationRegionaleService:
                 )
             )
             capacites[region_id]["disponible"] -= 1
+            capacites_centres[int(centre_reserve["id"])]["disponible"] -= 1
             repartition[region_id] = repartition.get(region_id, 0) + 1
 
         creees = AffectationRegionaleRepository.creer_en_lot(propositions)
@@ -880,6 +1023,167 @@ class AffectationRegionaleService:
                 "repartition_par_region": repartition,
             },
         )
+
+    @classmethod
+    @transaction.atomic
+    def proposer_reaffectations_sans_centre_compatible(
+        cls,
+        *,
+        session_id: int,
+        acteur=None,
+        appliquer: bool = False,
+    ) -> dict:
+        """Prépare le rattrapage des immergés bloqués dans une région.
+
+        Une affectation est transférable seulement si elle est active, ne
+        possède aucune affectation centre ouverte et qu'aucun centre de sa
+        région actuelle ne dispose encore d'une place compatible avec son sexe
+        et son public. Les affectations déjà validées vers un centre ne sont
+        jamais touchées.
+        """
+
+        centre_ids, region_ids = PerimetreCentresSessionService.region_ids(session_id)
+        regions = list(
+            RegionImmersionRepository.lister_donnees_algorithme().filter(
+                id__in=region_ids
+            )
+        )
+        centres = list(
+            CentreImmersionRepository.lister_donnees_algorithme(
+                region_ids=region_ids
+            ).filter(id__in=centre_ids)
+        )
+        if not regions or not centres:
+            raise ValidationAffectationErreur(
+                {"perimetre": "Aucune région ou aucun centre admissible n'est disponible."}
+            )
+
+        list(RegionImmersionRepository.verrouiller_par_ids(region_ids))
+        list(CentreImmersionRepository.verrouiller_par_ids(centre_ids))
+        capacites_centres = CapaciteAffectationService.capacites_centres(
+            session_id=session_id,
+            centres=centres,
+        )
+        centres_par_region = cls._centres_par_region(centres)
+
+        affectations = list(
+            AffectationRegionaleRepository.lister_actives_sans_centre(
+                session_id=session_id,
+                region_ids=region_ids,
+            ).select_for_update(of=("self",))
+        )
+        profils, sans_source = ProfilAffectationService.construire_profils(
+            [affectation.immerge for affectation in affectations]
+        )
+
+        bloquees = []
+        conservees = []
+        for affectation in affectations:
+            profil = profils.get(affectation.immerge_id)
+            if profil is None:
+                continue
+            centre = cls._centre_compatible_disponible(
+                profil=profil,
+                centres=centres_par_region.get(affectation.region_id, []),
+                capacites_centres=capacites_centres,
+            )
+            if centre is None:
+                bloquees.append((affectation, profil))
+                continue
+            capacites_centres[int(centre["id"])]["disponible"] -= 1
+            conservees.append(affectation.id)
+
+        nouvelles = []
+        transferees = []
+        sans_destination = []
+        repartition: dict[int, int] = {}
+        regions_par_id = {int(region["id"]): region for region in regions}
+
+        for affectation, profil in bloquees:
+            regions_candidates = [
+                region
+                for region in regions
+                if int(region["id"]) != int(affectation.region_id)
+            ]
+            capacites_compatibles = cls._capacites_regionales_compatibles(
+                profil=profil,
+                regions=regions_candidates,
+                centres_par_region=centres_par_region,
+                capacites_centres=capacites_centres,
+            )
+            region, score, mode = cls._choisir_region(
+                profil=profil,
+                regions=regions_candidates,
+                capacites=capacites_compatibles,
+                forcer_reliquat=True,
+            )
+            if region is None:
+                sans_destination.append(affectation.immerge_id)
+                continue
+
+            region_id = int(region["id"])
+            centre_reserve = cls._centre_compatible_disponible(
+                profil=profil,
+                centres=centres_par_region.get(region_id, []),
+                capacites_centres=capacites_centres,
+            )
+            if centre_reserve is None:
+                sans_destination.append(affectation.immerge_id)
+                continue
+
+            ancien_nom = regions_par_id[int(affectation.region_id)]["nom"]
+            motif = (
+                "Réaffectation automatique après absence de centre compatible"
+                f" | ancienne région={ancien_nom}"
+                f" | sexe={profil.sexe or 'non renseigné'}"
+                f" | public={profil.type_immerge}"
+                f" | correspondance={round(score * 100)}%"
+                f" | mode={mode}"
+            )
+            nouvelles.append(
+                AffectationRegionale(
+                    immerge_id=affectation.immerge_id,
+                    session_id=session_id,
+                    region_id=region_id,
+                    statut=AffectationRegionale.Statut.PROPOSEE,
+                    affecte_par=acteur,
+                    motif=motif,
+                )
+            )
+            capacites_centres[int(centre_reserve["id"])]["disponible"] -= 1
+            repartition[region_id] = repartition.get(region_id, 0) + 1
+            transferees.append(affectation)
+
+        if appliquer and nouvelles:
+            maintenant = timezone.now()
+            for affectation in transferees:
+                affectation.statut = AffectationRegionale.Statut.TRANSFEREE
+                affectation.motif = (
+                    f"{affectation.motif} | Transférée automatiquement le "
+                    f"{maintenant.isoformat()} faute de centre compatible."
+                ).strip(" |")
+                affectation.updated_at = maintenant
+            AffectationRegionaleRepository.mettre_a_jour_en_lot(
+                transferees,
+                ["statut", "motif", "updated_at"],
+            )
+            creees = AffectationRegionaleRepository.creer_en_lot(nouvelles)
+        else:
+            creees = nouvelles
+            transaction.set_rollback(True)
+
+        return {
+            "session_id": int(session_id),
+            "mode": "application" if appliquer else "simulation",
+            "affectations_regionales_sans_centre": len(affectations),
+            "conservees_dans_region_actuelle": len(conservees),
+            "bloquees": len(bloquees),
+            "reaffectations_proposees": len(creees),
+            "sans_source": sans_source,
+            "sans_destination": sans_destination,
+            "repartition_par_region": repartition,
+            "nouveaux_ids": [objet.id for objet in creees if objet.id],
+        }
 
     @staticmethod
     @transaction.atomic
@@ -1086,6 +1390,85 @@ class AffectationCentreService:
         return False
 
     @staticmethod
+    def _sexe_dortoir(sexe: str) -> str:
+        valeur = str(sexe or "").strip().upper()
+        if valeur == "M":
+            return "MASCULIN"
+        if valeur == "F":
+            return "FEMININ"
+        return ""
+
+    @classmethod
+    def _capacites_sexe_centres(
+        cls,
+        *,
+        session_id: int,
+        centres: list[dict],
+    ) -> dict[int, dict[str, dict[str, int]]]:
+        """Calcule les places d'hébergement réellement disponibles par sexe.
+
+        Lorsque l'hébergement est actif, les propositions et affectations centre
+        ouvertes sont déduites des lits utilisables du sexe correspondant. La
+        capacité globale du centre reste contrôlée séparément.
+        """
+        session = SessionImmersion.objects.select_related("parametres").get(
+            id=session_id, deleted_at__isnull=True
+        )
+        if not ParametreSessionService.hebergement_autorise(session):
+            return {}
+
+        from django.db.models import Count
+        from organisation.models import Dortoir, Lit
+
+        centre_ids = [int(centre["id"]) for centre in centres]
+        resultat = {
+            centre_id: {
+                "M": {"capacite": 0, "occupation": 0, "disponible": 0},
+                "F": {"capacite": 0, "occupation": 0, "disponible": 0},
+            }
+            for centre_id in centre_ids
+        }
+
+        lignes_lits = (
+            Lit.objects.filter(
+                dortoir__centre_id__in=centre_ids,
+                deleted_at__isnull=True,
+                statut=Lit.Statut.DISPONIBLE,
+                dortoir__deleted_at__isnull=True,
+                dortoir__statut=Dortoir.Statut.ACTIF,
+            )
+            .values("dortoir__centre_id", "dortoir__sexe_dortoir")
+            .annotate(total=Count("id"))
+        )
+        for ligne in lignes_lits:
+            centre_id = int(ligne["dortoir__centre_id"])
+            sexe = "M" if ligne["dortoir__sexe_dortoir"] == Dortoir.SexeDortoir.MASCULIN else "F"
+            resultat[centre_id][sexe]["capacite"] = int(ligne["total"])
+
+        ouvertes = list(
+            AffectationCentreRepository.lister_ouvertes().filter(
+                session_id=session_id, centre_id__in=centre_ids
+            ).only("id", "centre_id", "immerge_id", "immerge__origine_id", "immerge__type_immerge")
+        )
+        profils, _ = ProfilAffectationService.construire_profils(
+            [affectation.immerge for affectation in ouvertes]
+        )
+        for affectation in ouvertes:
+            profil = profils.get(affectation.immerge_id)
+            sexe = str(getattr(profil, "sexe", "") or "").strip().upper()
+            if sexe in {"M", "F"}:
+                resultat[int(affectation.centre_id)][sexe]["occupation"] += 1
+
+        for donnees_centre in resultat.values():
+            for donnees_sexe in donnees_centre.values():
+                donnees_sexe["disponible"] = max(
+                    0,
+                    int(donnees_sexe["capacite"])
+                    - int(donnees_sexe["occupation"]),
+                )
+        return resultat
+
+    @staticmethod
     def _public_compatible(type_immerge: str, publics_acceptes) -> bool:
         publics = {
             str(public).strip().upper()
@@ -1120,6 +1503,25 @@ class AffectationCentreService:
         type_examen = NormalisationGeographiqueService.normaliser(
             profil.niveau_examen or profil.type_immerge
         )
+
+        # Un libellé générique tel que « Tous type de BAC » signifie que le
+        # centre accepte toutes les séries de ce niveau. Il ne doit pas être
+        # comparé comme s'il s'agissait du nom exact d'une série.
+        libelles_generiques = {
+            NormalisationGeographiqueService.normaliser(libelle)
+            for libelle in (
+                type_examen,
+                f"tout type de {type_examen}",
+                f"tous les types de {type_examen}",
+                f"toute serie de {type_examen}",
+                f"toutes les series de {type_examen}",
+                f"toute filiere de {type_examen}",
+                f"toutes les filieres de {type_examen}",
+            )
+        }
+        if niveaux & libelles_generiques:
+            return True
+
         serie = NormalisationGeographiqueService.normaliser(profil.serie_filiere)
         combinaisons = {
             type_examen,
@@ -1138,6 +1540,7 @@ class AffectationCentreService:
         profil: ProfilAffectation,
         centres: list[dict],
         capacites: dict[int, dict],
+        capacites_sexe: dict[int, dict[str, dict[str, int]]] | None = None,
     ) -> list[tuple[float, float, int, dict]]:
         compatibles = []
 
@@ -1148,6 +1551,15 @@ class AffectationCentreService:
             totale = int(capacite.get("capacite_totale", 0))
             if disponible <= 0:
                 continue
+            sexe = str(profil.sexe or "").strip().upper()
+            if capacites_sexe is not None:
+                disponible_sexe = int(
+                    capacites_sexe.get(centre_id, {}).get(sexe, {}).get(
+                        "disponible", 0
+                    )
+                )
+                if sexe not in {"M", "F"} or disponible_sexe <= 0:
+                    continue
             if not cls._genre_compatible(profil.sexe, centre.get("genre")):
                 continue
             if not cls._public_compatible(
@@ -1155,12 +1567,6 @@ class AffectationCentreService:
                 centre.get("publics_acceptes"),
             ):
                 continue
-            if not cls._niveau_compatible(
-                profil,
-                centre.get("niveaux_acceptes"),
-            ):
-                continue
-
             score_province = NormalisationGeographiqueService.score(
                 profil.province_reference,
                 centre.get("province"),
@@ -1244,6 +1650,10 @@ class AffectationCentreService:
             centres=centres,
             region_id=region_id,
         )
+        capacites_sexe = cls._capacites_sexe_centres(
+            session_id=session_id,
+            centres=centres,
+        )
         profils, sans_source = ProfilAffectationService.construire_profils(candidats)
 
         mappings_regionaux = {
@@ -1270,6 +1680,7 @@ class AffectationCentreService:
                 profil=profil,
                 centres=centres,
                 capacites=capacites,
+                capacites_sexe=capacites_sexe if capacites_sexe else None,
             )
             if not compatibles:
                 sans_destination.append(immerge.id)
@@ -1297,6 +1708,10 @@ class AffectationCentreService:
                 )
             )
             capacites[centre_id]["disponible"] -= 1
+            sexe = str(profil.sexe or "").strip().upper()
+            if capacites_sexe and sexe in {"M", "F"}:
+                capacites_sexe[centre_id][sexe]["disponible"] -= 1
+                capacites_sexe[centre_id][sexe]["occupation"] += 1
             repartition[centre_id] = repartition.get(centre_id, 0) + 1
 
         creees = AffectationCentreRepository.creer_en_lot(propositions)
@@ -1387,16 +1802,21 @@ class AffectationCentreService:
             centres=[centre_donnees],
             region_id=centre.region_id,
         )
+        capacites_sexe = cls._capacites_sexe_centres(
+            session_id=immerge.session_id,
+            centres=[centre_donnees],
+        )
         if not cls._centres_compatibles(
             profil=profil,
             centres=[centre_donnees],
             capacites=capacites,
+            capacites_sexe=capacites_sexe if capacites_sexe else None,
         ):
             raise ValidationAffectationErreur(
                 {
                     "centre": (
-                        "Le centre est plein ou incompatible avec le sexe, "
-                        "le public, le niveau ou la série de l'immergé."
+                        "Le centre est plein ou ne dispose pas d'une place "
+                        "d'hébergement compatible avec le sexe et le public de l'immergé."
                     )
                 }
             )

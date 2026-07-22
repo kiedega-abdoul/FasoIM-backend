@@ -560,16 +560,6 @@ class CentreCertificationService:
                 "message": "Les informations avant l'arrivée ne sont pas encore publiées pour ce centre.",
             })
 
-        non_liberes = affectations.exclude(
-            immerge__statut=Immerge.Statut.LIBERE
-        ).count()
-        if non_liberes:
-            blocages.append({
-                "code": "IMMERGES_NON_LIBERES",
-                "message": "Des immergés du centre ne sont pas encore libérés.",
-                "total": non_liberes,
-            })
-
         parametres = session.parametres
         if parametres.activites_active:
             seances = Seance.objects.filter(
@@ -831,8 +821,6 @@ class EligibiliteAttestationService:
 
         if affectation.immerge.statut == Immerge.Statut.ANNULE:
             motifs_non_eligibilite.append("IMMERGE_ANNULE")
-        elif affectation.immerge.statut != Immerge.Statut.LIBERE:
-            motifs_verification.append("IMMERSION_NON_LIBEREE")
 
         if motifs_verification:
             decision = ResultatFinal.Decision.A_VERIFIER
@@ -1251,7 +1239,14 @@ class GenerationFichierService:
 class AttestationService:
     @classmethod
     @transaction.atomic
-    def generer_centre(cls, *, session_id, centre_id, acteur):
+    def generer_centre(
+        cls,
+        *,
+        session_id,
+        centre_id,
+        acteur,
+        progression_callback=None,
+    ):
         session = SessionImmersion.objects.select_related("parametres").get(id=session_id, deleted_at__isnull=True)
         ControleAccesDocumentsService.verifier_session_traitable(session)
         centre = CentreImmersion.objects.select_related("region").get(id=centre_id, deleted_at__isnull=True)
@@ -1275,10 +1270,31 @@ class AttestationService:
         )
         crees = 0
         deja = 0
-        for resultat in resultats:
+        total = len(resultats)
+
+        if progression_callback:
+            progression_callback(
+                traites=0,
+                total=total,
+                crees=0,
+                deja=0,
+            )
+
+        for index, resultat in enumerate(resultats, start=1):
             existant = DocumentGenereRepository.get_attestation_resultat(resultat.id)
             if existant:
                 deja += 1
+
+                if progression_callback and (
+                    index % 25 == 0 or index == total
+                ):
+                    progression_callback(
+                        traites=index,
+                        total=total,
+                        crees=crees,
+                        deja=deja,
+                    )
+
                 continue
             cle = f"ATTESTATION:{session.id}:{resultat.immerge_id}:V{resultat.version}"
             document = DocumentGenere(
@@ -1312,9 +1328,28 @@ class AttestationService:
                 save=False,
             )
             document.statut = DocumentGenere.Statut.GENERE
-            GenerationFichierService.enregistrer(document, pdf, extension="pdf")
+            GenerationFichierService.enregistrer(
+                document,
+                pdf,
+                extension="pdf",
+            )
             crees += 1
-        resume = {"eligibles": len(resultats), "generes": crees, "deja_generes": deja}
+
+            if progression_callback and (
+                index % 25 == 0 or index == total
+            ):
+                progression_callback(
+                    traites=index,
+                    total=total,
+                    crees=crees,
+                    deja=deja,
+                )
+
+        resume = {
+            "eligibles": total,
+            "generes": crees,
+            "deja_generes": deja,
+        }
         JournalActionService.journaliser_succes(
             acteur=acteur, session=session, region=centre.region, centre=centre,
             code_action="generer_attestations_centre", module_source="documents",
@@ -1633,9 +1668,22 @@ class WorkflowAutomatiqueAttestationService:
             code_action="valider_publier_attestations_region",
             module_source="documents",
             objet=publication,
-            motif="Attestations validées par la région et publiées automatiquement.",
+            motif=(
+                "Attestations validées, signées et publiées par "
+                "le Directeur régional."
+            ),
             contexte={"attestations_publiees": attendus},
         )
+
+        # Vérification informative seulement. La publication régionale
+        # est déjà définitivement enregistrée avant cet appel.
+        PublicationService._notifier_dgas_si_tous_centres_valides(
+            session=publication.session,
+            type_publication=(
+                PublicationOfficielle.TypePublication.ATTESTATIONS
+            ),
+        )
+
         return {"publication_id": publication.id, "publiees": attendus}
 
     @classmethod
@@ -1735,7 +1783,7 @@ class PublicationService:
             type_publication=PublicationOfficielle.TypePublication.INFORMATIONS_ARRIVEE,
         )
         if publication and publication.statut == PublicationOfficielle.Statut.PUBLIEE:
-            raise ValidationDocumentsErreur("Les informations de ce centre sont déjà publiées.")
+            return publication
         if publication is None or publication.statut in {
             PublicationOfficielle.Statut.REMPLACEE,
             PublicationOfficielle.Statut.ANNULEE,
@@ -1892,35 +1940,45 @@ class PublicationService:
         centres = cls._centres_attendus(session)
         if not centres:
             return False
-        valides = PublicationOfficielle.objects.filter(
+        publies = PublicationOfficielle.objects.filter(
             session=session,
             centre__in=centres,
             type_publication=type_publication,
-            statut=PublicationOfficielle.Statut.VALIDEE_REGION,
+            statut=PublicationOfficielle.Statut.PUBLIEE,
             deleted_at__isnull=True,
         ).values("centre_id").distinct().count()
-        if valides != len(centres):
+        if publies != len(centres):
             return False
         libelle = (
             "les informations avant l'arrivée"
             if type_publication == PublicationOfficielle.TypePublication.INFORMATIONS_ARRIVEE
-            else "les attestations signées"
+            else "les attestations"
         )
+
+        # Information institutionnelle uniquement :
+        # la DGAS ne valide, ne signe et ne publie rien dans ce workflow.
+        # Un échec d'envoi ne remet jamais en cause les publications
+        # déjà effectuées par les Directions régionales.
         NotificationService.planifier_acteurs_role(
             code_role="DGAS",
-            sujet=f"FasoIM : {libelle} sont prêts à publier",
+            sujet=f"FasoIM : publication régionale terminée pour {libelle}",
             message=(
-                f"Tous les centres de la session {session.nom} ont été validés. "
-                f"La DGAS peut maintenant publier {libelle}."
+                f"Tous les centres de la session {session.nom} ont terminé "
+                f"la publication régionale de {libelle}. "
+                "Cette notification est transmise à la DGAS à titre "
+                "strictement informatif."
             ),
-            type_message=(
-                TypesMessage.ORGANISATION_PRETE
-                if type_publication == PublicationOfficielle.TypePublication.INFORMATIONS_ARRIVEE
-                else TypesMessage.ATTESTATIONS_SOUMISES_DGAS
+            type_message=TypesMessage.TRAITEMENT_TERMINE,
+            cle_evenement=(
+                f"INFORMATION_DGAS_PUBLICATIONS_TERMINEES:"
+                f"{type_publication}:{session.id}"
             ),
-            cle_evenement=f"DOCUMENTS_PRETS_DGAS:{type_publication}:{session.id}",
             session_id=session.id,
-            contexte={"type_publication": type_publication, "centres": len(centres)},
+            contexte={
+                "informatif": True,
+                "type_publication": type_publication,
+                "centres_publies": len(centres),
+            },
         )
         return True
 
@@ -2521,14 +2579,34 @@ class AttestationPubliqueService:
         ).first()
         if resultat is None:
             raise ValidationDocumentsErreur("Le résultat final n'est pas disponible.")
+        identite = IdentiteImmergeService.donnees(immerge)
         reponse = {
             "publication": {
                 "reference": publication.reference,
                 "version": publication.version,
                 "date_publication": publication.date_publication,
             },
+            "immerge": {
+                "nom": identite["nom"],
+                "prenoms": identite["prenoms"],
+                "nom_complet": identite["nom_complet"],
+                "type_immerge": identite["type_immerge"],
+                "code_fasoim": identite["code_fasoim"],
+            },
+            "session": {
+                "id": immerge.session_id,
+                "nom": immerge.session.nom,
+                "code": immerge.session.code,
+                "annee": immerge.session.annee,
+            },
+            "affectation": {
+                "region": affectation.centre.region.nom,
+                "centre": affectation.centre.nom,
+            },
+            # Conservé pour compatibilité avec les clients existants.
             "code_fasoim": immerge.code_fasoim,
             "decision": resultat.decision,
+            "decision_libelle": resultat.get_decision_display(),
             "attestation_disponible": False,
         }
         document = None
@@ -2539,7 +2617,12 @@ class AttestationPubliqueService:
                 statut=DocumentGenere.Statut.PUBLIE,
                 deleted_at__isnull=True,
             ).first()
-            if document:
+            if (
+                document
+                and document.fichier
+                and document.signature_appliquee
+                and document.cachet_applique
+            ):
                 reponse.update({
                     "attestation_disponible": True,
                     "numero_document": document.numero_document,
@@ -2558,7 +2641,8 @@ class AttestationPubliqueService:
             resultat=JournalAction.Resultat.SUCCES,
             motif="Disponibilité de l'attestation consultée.",
             informations_consultees=[
-                "decision", "disponibilite_attestation", "numero_document"
+                "identite", "session", "affectation", "decision",
+                "disponibilite_attestation", "numero_document",
             ],
             request=request,
         )
@@ -2809,34 +2893,23 @@ class SessionClotureService:
             publications_attestations = (
                 PublicationOfficielleRepository.centres_session(
                     session_id=session.id,
-                    type_publication=PublicationOfficielle.TypePublication.ATTESTATIONS,
+                    type_publication=(
+                        PublicationOfficielle.TypePublication.ATTESTATIONS
+                    ),
                 )
                 .filter(statut=PublicationOfficielle.Statut.PUBLIEE)
                 .values("centre_id")
                 .distinct()
                 .count()
             )
-            if publications_attestations != len(centres):
-                etat.ajouter(
-                    "documents",
-                    "ATTESTATIONS_NON_PUBLIEES",
-                    "Toutes les attestations ne sont pas publiées par la DGAS.",
-                    abs(len(centres) - publications_attestations),
-                )
 
-            publication_nationale = PublicationOfficielle.objects.filter(
-                session=session,
-                type_publication=PublicationOfficielle.TypePublication.ATTESTATIONS,
-                perimetre=PublicationOfficielle.Perimetre.NATIONAL,
-                statut=PublicationOfficielle.Statut.PUBLIEE,
-                deleted_at__isnull=True,
-            ).exists()
-            if not publication_nationale and centres:
-                etat.ajouter(
-                    "documents",
-                    "PUBLICATION_NATIONALE_ATTESTATIONS_ABSENTE",
-                    "La publication nationale des attestations n'est pas effectuée.",
-                )
+            # La publication nationale DGAS n'est plus une condition
+            # de clôture. Les publications effectuées par les Directions
+            # régionales constituent la publication officielle.
+            etat.resume["publications_regionales_attestations"] = (
+                publications_attestations
+            )
+            etat.resume["publication_dgas_requise"] = False
 
         etat.resume = {
             "immerges": total_immerges,

@@ -6,9 +6,12 @@ from django.core.exceptions import (
 )
 from django.db import IntegrityError
 from rest_framework import status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
+
+from accounts.access_context import obtenir_affectation_courante_id
 
 from .models import (
     Evaluation,
@@ -42,6 +45,7 @@ from .serializers import (
     FiltreNoteSerializer,
     FiltrePresenceSerializer,
     FiltreSeanceSerializer,
+    ConfirmerTousPresentsSerializer,
     MarquerNoteSerializer,
     ModuleActiviteCreateSerializer,
     ModuleActiviteSerializer,
@@ -49,6 +53,7 @@ from .serializers import (
     MoyenneQuerySerializer,
     MoyenneSerializer,
     NoteCreateSerializer,
+    NoterTousSerializer,
     NoteSerializer,
     NoteUpdateSerializer,
     PresenceCreateSerializer,
@@ -385,8 +390,21 @@ class SeanceViewSet(viewsets.ModelViewSet):
         return Response(SeanceSerializer(seance).data)
 
 
+class PresencePagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+
+class NotePagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+
 class PresenceViewSet(viewsets.ModelViewSet):
     permission_classes = [PermissionPresence]
+    pagination_class = PresencePagination
     http_method_names = [
         "get",
         "post",
@@ -575,6 +593,22 @@ class PresenceViewSet(viewsets.ModelViewSet):
         return Response(statistiques)
 
 
+    @action(
+        detail=False, methods=["post"],
+        url_path="confirmer-tous-presents",
+    )
+    def confirmer_tous_presents(self, request):
+        serializer = ConfirmerTousPresentsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            seance = PresenceService.confirmer_tous_presents(
+                acteur=request.user, **serializer.validated_data
+            )
+        except Exception as exception:
+            lever_erreur_service(exception)
+        return Response(SeanceSerializer(seance).data)
+
+
 class EvaluationViewSet(viewsets.ModelViewSet):
     permission_classes = [PermissionEvaluation]
 
@@ -758,6 +792,7 @@ class EvaluationViewSet(viewsets.ModelViewSet):
 
 class NoteViewSet(viewsets.ModelViewSet):
     permission_classes = [PermissionNote]
+    pagination_class = NotePagination
 
     def get_queryset(self):
         if self.kwargs.get("pk"):
@@ -904,6 +939,21 @@ class NoteViewSet(viewsets.ModelViewSet):
         return Response(NoteSerializer(note).data)
 
     @action(
+        detail=False, methods=["post"], url_path="noter-tous"
+    )
+    def noter_tous(self, request):
+        serializer = NoterTousSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            resultat = NoteService.noter_tous_sans_note(
+                acteur=request.user, **serializer.validated_data
+            )
+        except Exception as exception:
+            lever_erreur_service(exception)
+        return Response(resultat)
+
+
+    @action(
         detail=False,
         methods=["get"],
         url_path="moyenne",
@@ -951,8 +1001,20 @@ class OperationActiviteViewSet(viewsets.GenericViewSet):
         serializer = SeanceIdSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        affectation_acteur_id = obtenir_affectation_courante_id()
+        if not affectation_acteur_id:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Choisissez une affectation de travail avant "
+                        "de préparer la feuille de présence."
+                    )
+                }
+            )
+
         tache = ouvrir_et_preparer_feuille_presence_task.delay(
             acteur_id=request.user.id,
+            affectation_acteur_id=int(affectation_acteur_id),
             **serializer.validated_data,
         )
         return self._reponse_tache(
@@ -971,8 +1033,20 @@ class OperationActiviteViewSet(viewsets.GenericViewSet):
         )
         serializer.is_valid(raise_exception=True)
 
+        affectation_acteur_id = obtenir_affectation_courante_id()
+        if not affectation_acteur_id:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Choisissez une affectation de travail avant "
+                        "de confirmer les présences."
+                    )
+                }
+            )
+
         tache = saisir_presences_masse_task.delay(
             acteur_id=request.user.id,
+            affectation_acteur_id=int(affectation_acteur_id),
             **serializer.validated_data,
         )
         return self._reponse_tache(

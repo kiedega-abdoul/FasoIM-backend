@@ -66,6 +66,32 @@ class SessionImmersionRepository:
             ],
         ).order_by("date_ouverture_inscription", "id")[:1]
 
+    @staticmethod
+    def sessions_consultables_arrivee():
+        from documents.models import PublicationOfficielle
+
+        session_ids = PublicationOfficielle.objects.filter(
+            type_publication=PublicationOfficielle.TypePublication.INFORMATIONS_ARRIVEE,
+            statut=PublicationOfficielle.Statut.PUBLIEE,
+            deleted_at__isnull=True,
+        ).values_list("session_id", flat=True)
+
+        return (
+            SessionImmersionRepository.all_active()
+            .filter(
+                id__in=session_ids,
+                statut__in=[
+                    SessionImmersion.Statut.OUVERTE,
+                    SessionImmersion.Statut.EN_PREPARATION,
+                    SessionImmersion.Statut.EN_COURS,
+                ],
+                parametres__consultation_publique_active=True,
+                parametres__deleted_at__isnull=True,
+            )
+            .order_by("type_session", "public_cible", "date_debut", "id")
+            .distinct()
+        )
+
 
 class ParametreSessionRepository:
     @staticmethod

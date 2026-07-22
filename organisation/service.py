@@ -248,14 +248,30 @@ class RegleOrganisationCentreService:
 
     @staticmethod
     @transaction.atomic
-    def marquer_prete_publication(*, session_id: int, centre_id: int):
+    def marquer_prete_publication(
+        *,
+        session_id: int,
+        centre_id: int,
+        acteur,
+    ):
         regle = (
             RegleOrganisationCentreRepository.get_par_session_centre_pour_update(
                 session_id,
                 centre_id,
             )
         )
-        return regle.marquer_prete_publication()
+        regle.marquer_prete_publication()
+
+        # Import local pour éviter une dépendance circulaire au chargement des
+        # modules : documents.service utilise aussi des services organisation.
+        from documents.service import PublicationService
+
+        PublicationService.soumettre_arrivee_centre(
+            session_id=session_id,
+            centre_id=centre_id,
+            acteur=acteur,
+        )
+        return regle
 
 
 class OrganisationCentreService:
@@ -325,6 +341,66 @@ class OrganisationCentreService:
             return 1
 
         return max(1, ceil(effectif_section / regle.capacite_max_groupe))
+
+    @classmethod
+    def planifier_sections_groupes(
+        cls,
+        *,
+        total: int,
+        regle: RegleOrganisationCentre,
+    ) -> dict:
+        """Calcule la structure cible sans rien enregistrer en base.
+
+        Les seuils déclenchent la division. Les capacités maximales restent
+        des plafonds. Les effectifs cibles sont répartis équitablement afin
+        que la synthèse affichée soit identique à la génération réelle.
+        """
+        nombre_sections = cls._nombre_sections(total, regle)
+        effectifs_sections = cls._repartir_equitablement(
+            total,
+            nombre_sections,
+        )
+
+        sections = []
+        total_groupes = 0
+        for index_section, effectif_section in enumerate(
+            effectifs_sections,
+            start=1,
+        ):
+            nombre_groupes = cls._nombre_groupes(
+                effectif_section,
+                regle,
+            )
+            effectifs_groupes = cls._repartir_equitablement(
+                effectif_section,
+                nombre_groupes,
+            )
+            total_groupes += nombre_groupes
+            sections.append(
+                {
+                    "ordre": index_section,
+                    "effectif_cible": effectif_section,
+                    "capacite_max": regle.capacite_max_section,
+                    "groupes": [
+                        {
+                            "ordre": index_groupe,
+                            "effectif_cible": effectif_groupe,
+                            "capacite_max": regle.capacite_max_groupe,
+                        }
+                        for index_groupe, effectif_groupe in enumerate(
+                            effectifs_groupes,
+                            start=1,
+                        )
+                    ],
+                }
+            )
+
+        return {
+            "effectif_total": total,
+            "nombre_sections": nombre_sections,
+            "nombre_groupes": total_groupes,
+            "sections": sections,
+        }
 
     @classmethod
     @transaction.atomic

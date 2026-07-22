@@ -221,6 +221,8 @@ class PermissionAffectationCentre(PermissionAffectationsBase):
         "verifier_compatibilite": "verifier_compatibilite_centre",
         "historique": "consulter_affectations_centres",
         "capacites": "consulter_affectations_centres",
+        "verifier_capacite": "verifier_capacite_centre",
+        "statistiques_centre": "consulter_affectations_centres",
     }
 
 

@@ -1264,7 +1264,10 @@ class PresenceService(ServiceActiviteBase):
                 )
                 continue
             else:
-                statut = Presence.StatutPresence.ABSENT
+                # Une feuille nouvellement préparée considère les
+                # participants présents par défaut. Le formateur
+                # ne corrige ensuite que les absences.
+                statut = Presence.StatutPresence.PRESENT
 
             nouvelles.append(
                 Presence(
@@ -1452,6 +1455,49 @@ class PresenceService(ServiceActiviteBase):
             heure_arrivee=heure_arrivee,
             observations=observations,
             verifier_acces=False,
+        )
+
+    @classmethod
+    @transaction.atomic
+    def confirmer_tous_presents(cls, seance_id, *, acteur):
+        seance = cls._seance(seance_id, verrou=True)
+        ControleAccesActivitesService.exiger(
+            acteur, cls.PERMISSION_VALIDER,
+            session_id=seance.session_id,
+            centre_id=seance.centre_id,
+        )
+        SeanceService.exiger_intervenant_seance(
+            seance=seance, acteur=acteur
+        )
+        if seance.statut_feuille_presence != Seance.StatutFeuillePresence.OUVERTE:
+            raise ValidationActiviteErreur(
+                "La feuille de présence doit être ouverte."
+            )
+
+        maintenant = timezone.now()
+        presences = list(
+            PresenceRepository.lister_par_seance(seance.id)
+        )
+        for presence in presences:
+            if presence.statut_presence == Presence.StatutPresence.DISPENSE:
+                continue
+            presence.statut_presence = Presence.StatutPresence.PRESENT
+            presence.heure_arrivee = None
+            presence.saisie_par = acteur
+            presence.date_saisie = maintenant
+
+        PresenceRepository.mettre_a_jour_en_masse(
+            presences,
+            [
+                "statut_presence",
+                "heure_arrivee",
+                "saisie_par",
+                "date_saisie",
+                "updated_at",
+            ],
+        )
+        return cls.valider_feuille_presence(
+            seance.id, acteur=acteur, verifier_acces=False
         )
 
     @classmethod
@@ -2379,6 +2425,72 @@ class NoteService(ServiceActiviteBase):
                 "updated_at",
             ],
         )
+
+    @classmethod
+    @transaction.atomic
+    def noter_tous_sans_note(
+        cls, *, evaluation_id, valeur, acteur
+    ):
+        evaluation = cls._evaluation(evaluation_id)
+        ControleAccesActivitesService.exiger(
+            acteur, cls.PERMISSION_SAISIR,
+            session_id=evaluation.session_id,
+            centre_id=evaluation.centre_id,
+        )
+        SeanceService.exiger_intervenant_seance(
+            seance=evaluation.seance, acteur=acteur
+        )
+        cls._exiger_evaluation_ouverte(evaluation)
+        valeur = cls._normaliser_decimal(valeur, "valeur")
+        if valeur < Decimal("15") or valeur > Decimal("18"):
+            raise ValidationActiviteErreur(
+                {"valeur": "La note globale doit être comprise entre 15 et 18."}
+            )
+        if valeur > evaluation.bareme:
+            raise ValidationActiviteErreur(
+                {"valeur": "La note dépasse le barème de l'évaluation."}
+            )
+
+        presents = list(
+            PresenceRepository.actives().filter(
+                seance_id=evaluation.seance_id,
+                statut_presence__in=[
+                    Presence.StatutPresence.PRESENT,
+                    Presence.StatutPresence.RETARD,
+                    Presence.StatutPresence.EXCUSE,
+                ],
+            ).values_list("affectation_centre_id", flat=True)
+        )
+        existantes = set(
+            NoteRepository.actives().filter(
+                evaluation_id=evaluation.id,
+                affectation_centre_id__in=presents,
+            ).values_list("affectation_centre_id", flat=True)
+        )
+        maintenant = timezone.now()
+        nouvelles = [
+            Note(
+                evaluation=evaluation,
+                affectation_centre_id=affectation_id,
+                valeur=valeur,
+                appreciation="",
+                statut_note=Note.StatutNote.NOTEE,
+                observations="",
+                saisie_par=acteur,
+                date_saisie=maintenant,
+            )
+            for affectation_id in presents
+            if affectation_id not in existantes
+        ]
+        Note.objects.bulk_create(
+            nouvelles, batch_size=500, ignore_conflicts=True
+        )
+        return {
+            "total_presents": len(presents),
+            "notes_creees": len(nouvelles),
+            "notes_conservees": len(existantes),
+            "valeur": valeur,
+        }
 
     @classmethod
     def modifier_note(

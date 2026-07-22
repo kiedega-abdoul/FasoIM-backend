@@ -422,6 +422,7 @@ class RemiseKitRepository:
         *,
         session_id=None,
         centre_id=None,
+        article_kit_id=None,
     ):
         queryset = cls.actives()
 
@@ -433,6 +434,11 @@ class RemiseKitRepository:
         if centre_id:
             queryset = queryset.filter(
                 affectation_centre__centre_id=centre_id,
+            )
+
+        if article_kit_id:
+            queryset = queryset.filter(
+                article_kit_id=article_kit_id,
             )
 
         return queryset.values("statut_remise").annotate(

@@ -520,7 +520,7 @@ class ActionAffectationsLotInputSerializer(serializers.Serializer):
         child=serializers.IntegerField(min_value=1),
         allow_empty=False,
         min_length=1,
-        max_length=1000,
+        max_length=10000,
     )
     motif = serializers.CharField(
         required=False,

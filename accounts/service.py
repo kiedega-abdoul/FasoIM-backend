@@ -1586,14 +1586,44 @@ class ContexteActeurService(ServiceBase):
 
     @staticmethod
     def serialiser_affectation(acteur, affectation, *, est_par_defaut=False):
+        from affectations.models import CentreImmersion, RegionImmersion
+
         permissions = sorted(ControleAccesService.permissions_effectives(acteur, affectation))
+        region_code = affectation.region_code or ""
+        region_nom = ""
+        centre_nom = ""
+
+        if region_code:
+            region_nom = (
+                RegionImmersion.objects.filter(
+                    code__iexact=region_code,
+                    deleted_at__isnull=True,
+                )
+                .values_list("nom", flat=True)
+                .first()
+                or region_code
+            )
+
+        if affectation.centre_id:
+            centre_nom = (
+                CentreImmersion.objects.filter(
+                    id=affectation.centre_id,
+                    deleted_at__isnull=True,
+                )
+                .values_list("nom", flat=True)
+                .first()
+                or f"Centre {affectation.centre_id}"
+            )
+
         return {
             "id": affectation.id,
             "est_permanente": affectation.session_id is None,
             "est_par_defaut": est_par_defaut,
             "niveau_affectation": affectation.niveau_affectation,
-            "region_code": affectation.region_code or "",
+            "region_code": region_code,
+            "region_nom": region_nom,
             "centre_id": affectation.centre_id,
+            "centre_nom": centre_nom,
             "date_debut": affectation.date_debut,
             "date_fin": affectation.date_fin,
             "statut": affectation.statut,

@@ -480,15 +480,16 @@ class DocumentsTests(TestCase):
         self.assertEqual(donnees["decision"], ResultatFinal.Decision.A_VERIFIER)
         self.assertIn("EVALUATIONS_NON_CLOTUREES", donnees["motifs"])
 
-    def test_immerge_non_libere_reste_a_verifier(self):
+    def test_immerge_en_immersion_peut_avoir_son_resultat_calcule(self):
         self.immerge.statut = Immerge.Statut.EN_IMMERSION
         self.immerge.save(update_fields=["statut", "updated_at"])
+
         donnees = EligibiliteAttestationService.calculer(
             affectation=self.affectation,
             acteur=self.acteur,
         )
-        self.assertEqual(donnees["decision"], ResultatFinal.Decision.A_VERIFIER)
-        self.assertIn("IMMERSION_NON_LIBEREE", donnees["motifs"])
+
+        self.assertNotIn("IMMERSION_NON_LIBEREE", donnees["motifs"])
 
     def test_generation_attestation_est_idempotente(self):
         self.publier_arrivee()

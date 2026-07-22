@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 
 from immerges.models import Immerge
 from sessions_app.models import ParametreSession, SessionImmersion
-from organisation.models import RegleOrganisationCentre
+from organisation.models import Dortoir, Lit, RegleOrganisationCentre
 
 from .models import (
     AffectationCentre,
@@ -41,6 +41,7 @@ from .service import (
     AffectationRegionaleService,
     CapaciteAffectationService,
     NormalisationGeographiqueService,
+    PerimetreCentresSessionService,
     ProfilAffectation,
     ValidationAffectationErreur,
 )
@@ -140,6 +141,88 @@ class ModelesAffectationsTests(TestCase):
         self.assertIn("niveaux_acceptes", ligne)
         self.assertNotIn("niveaux_examens_acceptes", ligne)
         self.assertEqual(ligne["niveaux_acceptes"], ["BEPC", "BAC_D"])
+
+    def test_centre_mixte_respecte_la_capacite_reelle_des_lits_par_sexe(self):
+        session = SessionImmersion.objects.create(
+            nom="Session capacité par sexe",
+            annee=2026,
+            numero_promotion=97,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=date(2026, 7, 1),
+            date_fin=date(2026, 7, 31),
+            statut=SessionImmersion.Statut.EN_PREPARATION,
+        )
+        ParametreSession.objects.create(
+            session=session,
+            hebergement_active=True,
+            centres_accueil=[{"centre_id": self.centre.id}],
+        )
+        dortoir_h = Dortoir.objects.create(
+            centre=self.centre, nom="Hommes",
+            sexe_dortoir=Dortoir.SexeDortoir.MASCULIN, capacite=1,
+        )
+        dortoir_f = Dortoir.objects.create(
+            centre=self.centre, nom="Femmes",
+            sexe_dortoir=Dortoir.SexeDortoir.FEMININ, capacite=2,
+        )
+        Lit.objects.create(dortoir=dortoir_h, numero_lit="H1")
+        Lit.objects.create(dortoir=dortoir_f, numero_lit="F1")
+        Lit.objects.create(dortoir=dortoir_f, numero_lit="F2")
+
+        capacites = AffectationCentreService._capacites_sexe_centres(
+            session_id=session.id,
+            centres=[{"id": self.centre.id}],
+        )
+
+        self.assertEqual(capacites[self.centre.id]["M"]["disponible"], 1)
+        self.assertEqual(capacites[self.centre.id]["F"]["disponible"], 2)
+
+    def test_perimetre_session_ne_duplique_pas_les_regions_par_centre(self):
+        centre_secondaire = CentreImmersion.objects.create(
+            region=self.region,
+            code="CENTRE-DOUBLON-002",
+            nom="Centre secondaire même région",
+            province="Kadiogo",
+            ville="Ouagadougou",
+        )
+        autre_region = RegionImmersion.objects.create(
+            code="AUTRE-REGION",
+            nom="Autre région",
+        )
+        centre_autre_region = CentreImmersion.objects.create(
+            region=autre_region,
+            code="AUTRE-REGION-001",
+            nom="Centre autre région",
+            province="Autre",
+            ville="Autre",
+        )
+        session = SessionImmersion.objects.create(
+            nom="Session périmètre régions uniques 2026",
+            annee=2026,
+            numero_promotion=98,
+            type_session=SessionImmersion.TypeSession.MIXTE,
+            public_cible=SessionImmersion.PublicCible.MIXTE,
+            date_debut=date(2026, 7, 1),
+            date_fin=date(2026, 7, 31),
+            statut=SessionImmersion.Statut.EN_PREPARATION,
+        )
+        ParametreSession.objects.create(
+            session=session,
+            centres_accueil=[
+                {"centre_id": self.centre.id},
+                {"centre_id": centre_secondaire.id},
+                {"centre_id": centre_autre_region.id},
+            ],
+        )
+
+        centre_ids, region_ids = PerimetreCentresSessionService.region_ids(session.id)
+
+        self.assertCountEqual(
+            centre_ids,
+            [self.centre.id, centre_secondaire.id, centre_autre_region.id],
+        )
+        self.assertEqual(region_ids, sorted([self.region.id, autre_region.id]))
 
     def test_capacite_region_est_somme_des_centres_actifs(self):
         centre_secondaire = CentreImmersion.objects.create(
@@ -429,6 +512,47 @@ class AlgorithmesAffectationsTests(SimpleTestCase):
             )
         )
 
+    def test_libelles_generiques_bac_acceptent_toutes_les_series(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            sexe="F",
+            niveau_examen="BAC",
+            serie_filiere="A4",
+        )
+
+        for libelle in (
+            "BAC",
+            "Tous type de BAC",
+            "Tous les types de BAC",
+            "Toutes les séries de BAC",
+        ):
+            with self.subTest(libelle=libelle):
+                self.assertTrue(
+                    AffectationCentreService._niveau_compatible(
+                        profil,
+                        [libelle],
+                    )
+                )
+
+    def test_libelle_generique_d_un_autre_niveau_reste_incompatible(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            sexe="F",
+            niveau_examen="BAC",
+            serie_filiere="D",
+        )
+
+        self.assertFalse(
+            AffectationCentreService._niveau_compatible(
+                profil,
+                ["Tous type de BEPC"],
+            )
+        )
+
 
 class ReglesPropositionsRegionalesTests(SimpleTestCase):
 
@@ -545,6 +669,28 @@ class SerializersAffectationsTests(SimpleTestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("affectation_ids", serializer.errors)
 
+    def test_serializer_validation_accepte_dix_mille_ids(self):
+        serializer = ValidationAffectationsLotInputSerializer(
+            data={
+                "affectation_ids": list(range(1, 10001)),
+                "motif": "Validation nationale",
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(len(serializer.validated_data["affectation_ids"]), 10000)
+
+    def test_serializer_validation_refuse_plus_de_dix_mille_ids(self):
+        serializer = ValidationAffectationsLotInputSerializer(
+            data={
+                "affectation_ids": list(range(1, 10002)),
+                "motif": "Lot trop volumineux",
+            }
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("affectation_ids", serializer.errors)
+
     def test_serializer_rejet_exige_un_motif(self):
         serializer = RejetAffectationsLotInputSerializer(
             data={
@@ -650,3 +796,87 @@ class TachesEtRoutesAffectationsTests(SimpleTestCase):
         reponse = client.get("/api/affectations/regions/")
 
         self.assertIn(reponse.status_code, {401, 403})
+
+
+class CapacitesRegionalesCompatiblesTests(SimpleTestCase):
+    def setUp(self):
+        self.regions = [
+            {"id": 1, "nom": "Région féminine", "code": "FEM"},
+            {"id": 2, "nom": "Région mixte", "code": "MIX"},
+        ]
+        self.centres_par_region = {
+            1: [
+                {
+                    "id": 10,
+                    "region_id": 1,
+                    "genre": CentreImmersion.Genre.FEMININ,
+                    "publics_acceptes": [Immerge.TypeImmerge.BAC],
+                }
+            ],
+            2: [
+                {
+                    "id": 20,
+                    "region_id": 2,
+                    "genre": CentreImmersion.Genre.MIXTE,
+                    "publics_acceptes": [Immerge.TypeImmerge.BAC],
+                }
+            ],
+        }
+        self.capacites = {
+            10: {"disponible": 100, "capacite_totale": 100},
+            20: {"disponible": 50, "capacite_totale": 50},
+        }
+
+    def test_un_homme_ne_consomme_pas_une_place_d_un_centre_feminin(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            sexe="M",
+        )
+
+        resultat = AffectationRegionaleService._capacites_regionales_compatibles(
+            profil=profil,
+            regions=self.regions,
+            centres_par_region=self.centres_par_region,
+            capacites_centres=self.capacites,
+        )
+
+        self.assertEqual(resultat[1]["disponible"], 0)
+        self.assertEqual(resultat[2]["disponible"], 50)
+
+    def test_une_femme_peut_utiliser_un_centre_feminin_ou_mixte(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.BAC,
+            sexe="F",
+        )
+
+        resultat = AffectationRegionaleService._capacites_regionales_compatibles(
+            profil=profil,
+            regions=self.regions,
+            centres_par_region=self.centres_par_region,
+            capacites_centres=self.capacites,
+        )
+
+        self.assertEqual(resultat[1]["disponible"], 100)
+        self.assertEqual(resultat[2]["disponible"], 50)
+
+    def test_un_public_non_accepte_ne_consomme_aucune_place(self):
+        profil = ProfilAffectation(
+            immerge_id=1,
+            origine_id=1,
+            type_immerge=Immerge.TypeImmerge.CONCOURS,
+            sexe="F",
+        )
+
+        resultat = AffectationRegionaleService._capacites_regionales_compatibles(
+            profil=profil,
+            regions=self.regions,
+            centres_par_region=self.centres_par_region,
+            capacites_centres=self.capacites,
+        )
+
+        self.assertEqual(resultat[1]["disponible"], 0)
+        self.assertEqual(resultat[2]["disponible"], 0)

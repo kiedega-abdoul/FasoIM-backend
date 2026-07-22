@@ -265,3 +265,16 @@ class SessionPubliqueSerializer(serializers.ModelSerializer):
             "date_debut", "date_fin", "description",
             "directives_generales", "documents_exiges",
         ]
+
+
+class SessionConsultationArriveeSerializer(serializers.ModelSerializer):
+    type_session_libelle = serializers.CharField(source="get_type_session_display", read_only=True)
+    public_cible_libelle = serializers.CharField(source="get_public_cible_display", read_only=True)
+
+    class Meta:
+        model = SessionImmersion
+        fields = [
+            "id", "nom", "code", "type_session", "type_session_libelle",
+            "public_cible", "public_cible_libelle", "annee",
+            "date_debut", "date_fin",
+        ]

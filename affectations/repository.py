@@ -899,6 +899,33 @@ class AffectationRegionaleRepository:
         )
 
     @staticmethod
+    def lister_actives_sans_centre(*, session_id, region_ids=None):
+        """Affectations régionales actives non encore couvertes par un centre.
+
+        Ces lignes représentent une demande de capacité réelle dans la région.
+        Elles doivent être réservées par sexe et public avant toute nouvelle
+        proposition régionale.
+        """
+
+        affectation_centre_ouverte = AffectationCentre.objects.filter(
+            immerge_id=OuterRef("immerge_id"),
+            session_id=session_id,
+            statut__in=STATUTS_CENTRES_OUVERTS,
+            deleted_at__isnull=True,
+        )
+        queryset = (
+            AffectationRegionaleRepository.lister_actives()
+            .filter(session_id=session_id)
+            .annotate(possede_centre_ouvert=Exists(affectation_centre_ouverte))
+            .filter(possede_centre_ouvert=False)
+            .select_related("immerge", "region")
+            .order_by("date_affectation", "id")
+        )
+        if region_ids:
+            queryset = queryset.filter(region_id__in=_liste_ids(region_ids))
+        return queryset
+
+    @staticmethod
     def mapping_ouvertes_par_immerges(immerge_ids):
         return AffectationRegionaleRepository.lister_ouvertes().filter(
             immerge_id__in=_liste_ids(immerge_ids),

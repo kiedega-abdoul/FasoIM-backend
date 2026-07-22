@@ -6,6 +6,7 @@ import unicodedata
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from rest_framework import status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
@@ -650,15 +651,11 @@ class AffectationRegionaleViewSet(AffectationsViewSetBase):
     @action(detail=False, methods=["get"], url_path="capacites")
     def capacites(self, request):
         session_id = request.query_params.get("session_id") or request.query_params.get("session")
-        region_id = request.query_params.get("region_id")
         if not session_id:
             raise ValidationError({"session_id": "La session est obligatoire."})
-        if not region_id:
-            raise ValidationError({"region_id": "La région est obligatoire."})
         try:
-            donnees = CapaciteAffectationService.rapport_centres(
+            donnees = CapaciteAffectationService.rapport_regions(
                 session_id=int(session_id),
-                region_id=int(region_id),
             )
         except (DjangoValidationError, ValidationAffectationErreur, ValueError) as exception:
             lever_erreur_service(exception)
@@ -760,10 +757,18 @@ class AffectationRegionaleViewSet(AffectationsViewSetBase):
         return self.reponse_action("Affectation régionale annulée.")
 
 
+
+class PaginationAffectationsCentre(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class AffectationCentreViewSet(AffectationsViewSetBase):
     """Propositions, validations et affectations manuelles aux centres."""
 
     permission_classes = [PermissionAffectationCentre]
+    pagination_class = PaginationAffectationsCentre
     http_method_names = [
         "get",
         "post",
@@ -821,6 +826,45 @@ class AffectationCentreViewSet(AffectationsViewSetBase):
             many=False,
         )
         return Response(donnees)
+
+    @action(detail=False, methods=["get"], url_path="statistiques-centre")
+    def statistiques_centre(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        objets = list(queryset)
+        profils, _ = ProfilAffectationService.construire_profils(
+            [objet.immerge for objet in objets]
+        ) if objets else ({}, [])
+
+        hommes = 0
+        femmes = 0
+        a_organiser = 0
+        for objet in objets:
+            profil = profils.get(objet.immerge_id)
+            sexe = str(getattr(profil, "sexe", "") or "").strip().upper()
+            if sexe in {"M", "H", "HOMME", "MASCULIN"}:
+                hommes += 1
+            elif sexe in {"F", "FEMME", "FEMININ", "FÉMININ"}:
+                femmes += 1
+
+            groupe_actif = any(
+                ligne.deleted_at is None and ligne.statut == "ACTIVE"
+                for ligne in objet.affectations_groupes.all()
+            )
+            lit_actif = any(
+                ligne.deleted_at is None and ligne.statut == "ACTIVE"
+                for ligne in objet.attributions_lits.all()
+            )
+            if not (groupe_actif and lit_actif):
+                a_organiser += 1
+
+        centre = objets[0].centre if objets else None
+        return Response({
+            "total": len(objets),
+            "hommes": hommes,
+            "femmes": femmes,
+            "a_organiser": a_organiser,
+            "centre_nom": getattr(centre, "nom", "") if centre else "",
+        })
 
     def create(self, request, *args, **kwargs):
         serializer = AffectationCentreManuelleInputSerializer(

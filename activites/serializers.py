@@ -1195,6 +1195,21 @@ class SaisiePresencesMasseSerializer(serializers.Serializer):
         return value
 
 
+class ConfirmerTousPresentsSerializer(serializers.Serializer):
+    seance_id = serializers.IntegerField(min_value=1)
+
+
+class NoterTousSerializer(serializers.Serializer):
+    evaluation_id = serializers.IntegerField(min_value=1)
+    valeur = serializers.DecimalField(
+        max_digits=7,
+        decimal_places=2,
+        min_value=15,
+        max_value=18,
+        default=15,
+    )
+
+
 class ValidationFeuillesMasseSerializer(serializers.Serializer):
     seance_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),

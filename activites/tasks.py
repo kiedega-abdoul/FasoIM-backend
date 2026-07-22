@@ -12,6 +12,11 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from accounts.access_context import (
+    definir_affectation_courante_id,
+    restaurer_affectation_courante_id,
+)
+
 from .repository import (
     CandidatActiviteRepository,
     EvaluationRepository,
@@ -355,6 +360,7 @@ def ouvrir_et_preparer_feuille_presence_task(
     self,
     seance_id,
     acteur_id,
+    affectation_acteur_id,
 ):
     task_id = _task_id(self)
     operation = "ouvrir_et_preparer_feuille_presence"
@@ -388,6 +394,9 @@ def ouvrir_et_preparer_feuille_presence_task(
                 ),
             )
 
+        token = definir_affectation_courante_id(
+            int(affectation_acteur_id)
+        )
         try:
             acteur = _acteur(acteur_id)
             PresenceService.ouvrir_feuille_presence(
@@ -432,6 +441,8 @@ def ouvrir_et_preparer_feuille_presence_task(
                 cumuls=cumuls,
                 erreur=erreur,
             )
+        finally:
+            restaurer_affectation_courante_id(token)
 
 
 @shared_task(
@@ -443,6 +454,7 @@ def saisir_presences_masse_task(
     seance_id,
     lignes,
     acteur_id,
+    affectation_acteur_id,
 ):
     task_id = _task_id(self)
     operation = "saisir_presences_masse"
@@ -477,6 +489,9 @@ def saisir_presences_masse_task(
                 message="Une saisie identique est déjà en cours.",
             )
 
+        token = definir_affectation_courante_id(
+            int(affectation_acteur_id)
+        )
         try:
             acteur = _acteur(acteur_id)
             for lot in _lots(
@@ -512,6 +527,8 @@ def saisir_presences_masse_task(
                 cumuls=cumuls,
                 erreur=erreur,
             )
+        finally:
+            restaurer_affectation_courante_id(token)
 
 
 @shared_task(

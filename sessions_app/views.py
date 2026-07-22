@@ -17,6 +17,7 @@ from .serializers import (
     SessionImmersionCreateSerializer,
     SessionImmersionSerializer,
     SessionPubliqueSerializer,
+    SessionConsultationArriveeSerializer,
 )
 from .service import ParametreSessionService, SessionImmersionService
 
@@ -410,4 +411,14 @@ class SessionsOuvertesPubliquesAPIView(APIView):
     def get(self, request):
         queryset = SessionImmersionRepository.sessions_ouvertes_aux_inscriptions()
         serializer = SessionPubliqueSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SessionsConsultablesArriveeAPIView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        queryset = SessionImmersionRepository.sessions_consultables_arrivee()
+        serializer = SessionConsultationArriveeSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)

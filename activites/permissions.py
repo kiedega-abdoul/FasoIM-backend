@@ -158,6 +158,7 @@ class PermissionPresence(PermissionActivitesBase):
         "cloturer_feuille": "cloturer_feuille_presence",
         "taux": "calculer_taux_presence",
         "statistiques": "consulter_presences",
+        "confirmer_tous_presents": "valider_presence",
     }
 
 
@@ -189,6 +190,7 @@ class PermissionNote(PermissionActivitesBase):
         "marquer_absent": "marquer_absence_note",
         "marquer_dispense": "marquer_dispense_note",
         "moyenne": "calculer_moyenne",
+        "noter_tous": "saisir_note",
     }
 
 

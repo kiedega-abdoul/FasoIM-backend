@@ -54,6 +54,7 @@ from .tasks import (
     publier_session_task,
     signer_attestations_region_task,
 )
+from accounts.access_context import obtenir_affectation_courante_id
 from django.core.cache import cache
 from sessions_app.models import SessionImmersion
 
@@ -105,6 +106,7 @@ class ResultatFinalViewSet(viewsets.ReadOnlyModelViewSet):
             session_id=serializer.validated_data["session_id"],
             centre_id=serializer.validated_data["centre_id"],
             acteur_id=request.user.id,
+            affectation_acteur_id=obtenir_affectation_courante_id(),
         )
         return Response({"task_id": resultat.id, "statut": "EN_ATTENTE"}, status=status.HTTP_202_ACCEPTED)
 
@@ -292,6 +294,7 @@ class DocumentGenereViewSet(viewsets.ReadOnlyModelViewSet):
             session_id=serializer.validated_data["session_id"],
             centre_id=serializer.validated_data["centre_id"],
             acteur_id=request.user.id,
+            affectation_acteur_id=obtenir_affectation_courante_id(),
         )
         return Response({"task_id": resultat.id, "statut": "EN_ATTENTE"}, status=status.HTTP_202_ACCEPTED)
 
@@ -407,6 +410,13 @@ class ConsultationAttestationPubliqueView(APIView):
             InformationsArriveeService.verifier_limite(
                 adresse_ip, usage="consultation_attestation"
             )
+        except ValidationDocumentsErreur:
+            return Response(
+                {"detail": "Trop de tentatives. Veuillez réessayer plus tard."},
+                status=429,
+            )
+
+        try:
             immerge = IdentiteImmergeService.rechercher_public(
                 **serializer.validated_data
             )
@@ -461,6 +471,8 @@ class TelechargementAttestationPubliqueView(APIView):
             or document.type_document != DocumentGenere.TypeDocument.ATTESTATION
             or document.statut != DocumentGenere.Statut.PUBLIE
             or not document.fichier
+            or not document.signature_appliquee
+            or not document.cachet_applique
         ):
             return Response({"detail": "Attestation indisponible."}, status=404)
         if not GenerationFichierService.verifier_integrite(document):

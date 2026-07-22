@@ -121,10 +121,19 @@ class SessionImmersionService:
         if nouveau_statut not in statuts_actifs:
             return
 
+        filtres_concurrence = {
+            "deleted_at__isnull": True,
+            "type_session": session.type_session,
+            "statut__in": statuts_actifs,
+        }
+        # BAC et BEPC sont deux publics d'examen distincts et peuvent être
+        # actifs simultanément. L'unicité des examens porte donc sur le couple
+        # (type_session, public_cible), contrairement aux autres types.
+        if session.type_session == SessionImmersion.TypeSession.EXAMEN:
+            filtres_concurrence["public_cible"] = session.public_cible
+
         concurrentes = SessionImmersion.objects.filter(
-            deleted_at__isnull=True,
-            type_session=session.type_session,
-            statut__in=statuts_actifs,
+            **filtres_concurrence,
         ).exclude(pk=session.pk)
         if concurrentes.exists():
             raise ValidationError({
@@ -253,7 +262,12 @@ class ParametreSessionService:
 
     @staticmethod
     def normaliser_centres_accueil(*, session, centres):
-        """Valide et photographie les centres retenus pour une session."""
+        """Valide et photographie les centres actifs retenus pour une session.
+
+        La sélection du centre précède volontairement la création de sa règle
+        d'organisation. Cette méthode ne doit donc jamais exiger l'existence d'une
+        ``RegleOrganisationCentre``.
+        """
         if centres in (None, ""):
             return []
         if not isinstance(centres, list):
@@ -262,7 +276,6 @@ class ParametreSessionService:
             })
 
         from affectations.models import CentreImmersion
-        from organisation.models import RegleOrganisationCentre
 
         ids = []
         for index, ligne in enumerate(centres):
@@ -305,37 +318,6 @@ class ParametreSessionService:
                     f"région inactive : {manquants}."
                 )
             })
-
-        if session is not None and ids:
-            regles = {
-                regle.centre_id: regle
-                for regle in RegleOrganisationCentre.objects.filter(
-                    session=session,
-                    centre_id__in=ids,
-                    deleted_at__isnull=True,
-                )
-            }
-            sans_regle = sorted(set(ids) - set(regles))
-            if sans_regle:
-                raise ValidationError({
-                    "centres_accueil": (
-                        "Chaque centre sélectionné doit déjà disposer d'une règle "
-                        "d'organisation pour cette session. Centres sans règle : "
-                        f"{sans_regle}."
-                    )
-                })
-            invalides = sorted(
-                centre_id
-                for centre_id, regle in regles.items()
-                if int(regle.capacite_ouverte or 0) <= 0
-            )
-            if invalides:
-                raise ValidationError({
-                    "centres_accueil": (
-                        "La capacité ouverte doit être strictement positive pour les "
-                        f"centres : {invalides}."
-                    )
-                })
 
         return [
             {

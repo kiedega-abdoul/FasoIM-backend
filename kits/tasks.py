@@ -12,6 +12,10 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from accounts.access_context import (
+    definir_affectation_courante_id,
+    restaurer_affectation_courante_id,
+)
 from .repository import CandidatRemiseKitRepository
 from .service import (
     ControleAccesKitsService,
@@ -529,6 +533,7 @@ def valider_remises_immerges_task(
     session_id,
     centre_id,
     acteur_id,
+    affectation_acteur_id=None,
     affectation_centre_ids=None,
     article_kit_ids=None,
 ):
@@ -574,15 +579,22 @@ def valider_remises_immerges_task(
         cumuls = {}
         try:
             acteur = _acteur(acteur_id)
-            ControleAccesKitsService.exiger(
-                acteur,
-                (
-                    ControleAccesKitsService
-                    .VALIDER_REMISES_MASSE
-                ),
-                session_id=session_id,
-                centre_id=centre_id,
+
+            token = definir_affectation_courante_id(
+                affectation_acteur_id
             )
+            try:
+                ControleAccesKitsService.exiger(
+                    acteur,
+                    (
+                        ControleAccesKitsService
+                        .VALIDER_REMISES_MASSE
+                    ),
+                    session_id=session_id,
+                    centre_id=centre_id,
+                )
+            finally:
+                restaurer_affectation_courante_id(token)
 
             for lot_ids in _lots(
                 ids,

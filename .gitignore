@@ -52,3 +52,9 @@ celerybeat-schedule*
 
 backend-zip/
 backend-zip.zip
+
+# Sauvegardes locales
+*.backup
+*.backup_*
+*.json.backup
+sauvegarde_avant_reinitialisation.json

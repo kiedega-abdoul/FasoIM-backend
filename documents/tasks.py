@@ -10,6 +10,10 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from accounts.models import Acteur
+from accounts.access_context import (
+    definir_affectation_courante_id,
+    restaurer_affectation_courante_id,
+)
 from affectations.models import CentreImmersion
 from audit.models import JournalAction
 from audit.service import JournalActionService
@@ -48,39 +52,147 @@ def _progression(task_id, **donnees):
 
 
 @shared_task(bind=True, name="documents.calculer_resultats_centre")
-def calculer_resultats_centre_task(self, *, session_id, centre_id, acteur_id):
+def calculer_resultats_centre_task(
+    self,
+    *,
+    session_id,
+    centre_id,
+    acteur_id,
+    affectation_acteur_id=None,
+):
     task_id = self.request.id
-    _progression(task_id, statut="EN_COURS", progression=5, session_id=session_id, centre_id=centre_id, acteur_id=acteur_id)
-    acteur = Acteur.objects.get(id=acteur_id, deleted_at__isnull=True)
+    _progression(
+        task_id,
+        statut="EN_COURS",
+        progression=5,
+        session_id=session_id,
+        centre_id=centre_id,
+        acteur_id=acteur_id,
+        affectation_acteur_id=affectation_acteur_id,
+    )
+
+    token = definir_affectation_courante_id(
+        affectation_acteur_id
+    )
+
     try:
+        acteur = Acteur.objects.get(
+            id=acteur_id,
+            deleted_at__isnull=True,
+        )
+
         resultat = EligibiliteAttestationService.calculer_centre(
             session_id=session_id,
             centre_id=centre_id,
             acteur=acteur,
         )
-        _progression(task_id, statut="TERMINE", progression=100, resultat=resultat)
+
+        _progression(
+            task_id,
+            statut="TERMINE",
+            progression=100,
+            resultat=resultat,
+        )
         return _json_safe(resultat)
+
     except Exception as exc:
-        _progression(task_id, statut="ECHEC", progression=100, erreur=str(exc))
+        _progression(
+            task_id,
+            statut="ECHEC",
+            progression=100,
+            erreur=str(exc),
+        )
         raise
+
+    finally:
+        restaurer_affectation_courante_id(token)
 
 
 @shared_task(bind=True, name="documents.generer_attestations_centre")
-def generer_attestations_centre_task(self, *, session_id, centre_id, acteur_id):
+def generer_attestations_centre_task(
+    self,
+    *,
+    session_id,
+    centre_id,
+    acteur_id,
+    affectation_acteur_id=None,
+):
     task_id = self.request.id
-    _progression(task_id, statut="EN_COURS", progression=5, session_id=session_id, centre_id=centre_id, acteur_id=acteur_id)
-    acteur = Acteur.objects.get(id=acteur_id, deleted_at__isnull=True)
+
+    _progression(
+        task_id,
+        statut="EN_COURS",
+        progression=5,
+        session_id=session_id,
+        centre_id=centre_id,
+        acteur_id=acteur_id,
+        affectation_acteur_id=affectation_acteur_id,
+    )
+
+    token = definir_affectation_courante_id(
+        affectation_acteur_id
+    )
+
     try:
+        acteur = Acteur.objects.get(
+            id=acteur_id,
+            deleted_at__isnull=True,
+        )
+
+        def publier_progression(*, traites, total, crees, deja):
+            if total <= 0:
+                pourcentage = 95
+            else:
+                # La génération occupe la plage de 5 % à 95 %.
+                pourcentage = 5 + int(
+                    (traites / total) * 90
+                )
+                pourcentage = min(95, max(5, pourcentage))
+
+            _progression(
+                task_id,
+                statut="EN_COURS",
+                progression=pourcentage,
+                session_id=session_id,
+                centre_id=centre_id,
+                acteur_id=acteur_id,
+                affectation_acteur_id=affectation_acteur_id,
+                traites=traites,
+                total=total,
+                generes=crees,
+                deja_generes=deja,
+                message=(
+                    f"Attestations préparées : "
+                    f"{traites}/{total}"
+                ),
+            )
+
         resultat = AttestationService.generer_centre(
             session_id=session_id,
             centre_id=centre_id,
             acteur=acteur,
+            progression_callback=publier_progression,
         )
-        _progression(task_id, statut="TERMINE", progression=100, resultat=resultat)
+
+        _progression(
+            task_id,
+            statut="TERMINE",
+            progression=100,
+            resultat=resultat,
+        )
         return _json_safe(resultat)
+
     except Exception as exc:
-        _progression(task_id, statut="ECHEC", progression=100, erreur=str(exc))
+        _progression(
+            task_id,
+            statut="ECHEC",
+            progression=100,
+            erreur=str(exc),
+        )
         raise
+
+    finally:
+        restaurer_affectation_courante_id(token)
 
 
 @shared_task(bind=True, name="documents.generer_rapport")

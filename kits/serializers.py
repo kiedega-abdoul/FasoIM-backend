@@ -477,6 +477,10 @@ class StatistiquesKitsQuerySerializer(serializers.Serializer):
         min_value=1,
         required=False,
     )
+    article_kit_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+    )
 
     def validate(self, attrs):
         if not attrs.get("session_id") and not attrs.get("centre_id"):

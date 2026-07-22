@@ -6,9 +6,10 @@ from rest_framework.test import APITestCase
 from django.utils import timezone
 
 from accounts.models import AffectationActeur, AffectationRole, Permission, Role, RolePermission
+from affectations.models import CentreImmersion, RegionImmersion
 
 from .models import ParametreSession, SessionImmersion
-from .service import SessionImmersionService
+from .service import ParametreSessionService, SessionImmersionService
 
 
 CHAMPS_TECHNIQUES_NON_EXPOSES = {"created_at", "updated_at", "deleted_at"}
@@ -161,6 +162,40 @@ class SessionImmersionAPITests(APITestCase):
             session_data=session_data,
             parametres_data=parametres_data,
         )
+
+    def test_selectionner_un_centre_sans_regle_organisation(self):
+        region = RegionImmersion.objects.create(
+            code="KADIOGO",
+            nom="Kadiogo",
+            statut=RegionImmersion.Statut.ACTIVE,
+        )
+        centre = CentreImmersion.objects.create(
+            region=region,
+            code="KDG-CENTRE-001",
+            nom="Centre Kadiogo 1",
+            province="Kadiogo",
+            ville="Ouagadougou",
+            statut=CentreImmersion.Statut.ACTIF,
+        )
+        session = SessionImmersion.objects.create(
+            nom="Session BAC 2026",
+            annee=2026,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BAC,
+            date_debut=date(2026, 8, 1),
+            date_fin=date(2026, 8, 30),
+        )
+
+        centres = ParametreSessionService.normaliser_centres_accueil(
+            session=session,
+            centres=[{"centre_id": centre.id}],
+        )
+
+        self.assertEqual(centres, [{
+            "centre_id": centre.id,
+            "centre_code": centre.code,
+            "centre_nom": centre.nom,
+        }])
 
     def test_creer_session_puis_configurer_parametres(self):
         payload_session = {
@@ -427,6 +462,45 @@ class SessionImmersionAPITests(APITestCase):
 
         seconde.refresh_from_db()
         self.assertEqual(seconde.statut, SessionImmersion.Statut.BROUILLON)
+
+    def test_bac_et_bepc_peuvent_etre_actifs_en_meme_temps(self):
+        bac = self.creer_session(
+            nom="Session BAC active",
+            annee=2026,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BAC,
+        )
+        bepc = self.creer_session(
+            nom="Session BEPC active",
+            annee=2026,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BEPC,
+        )
+        SessionImmersionService.mettre_en_preparation(bac)
+        SessionImmersionService.mettre_en_preparation(bepc)
+        bac.refresh_from_db()
+        bepc.refresh_from_db()
+        self.assertEqual(bac.statut, SessionImmersion.Statut.EN_PREPARATION)
+        self.assertEqual(bepc.statut, SessionImmersion.Statut.EN_PREPARATION)
+
+    def test_deux_sessions_bac_actives_sont_refusees(self):
+        premiere = self.creer_session(
+            nom="Session BAC active 1",
+            annee=2026,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BAC,
+        )
+        seconde = self.creer_session(
+            nom="Session BAC active 2",
+            annee=2027,
+            type_session=SessionImmersion.TypeSession.EXAMEN,
+            public_cible=SessionImmersion.PublicCible.BAC,
+            date_debut=date(2027, 8, 1),
+            date_fin=date(2027, 8, 30),
+        )
+        SessionImmersionService.mettre_en_preparation(premiere)
+        with self.assertRaisesMessage(Exception, "Une autre session active existe déjà"):
+            SessionImmersionService.mettre_en_preparation(seconde)
 
     def test_une_seule_session_publique_pour_les_volontaires(self):
         aujourd_hui = timezone.localdate()

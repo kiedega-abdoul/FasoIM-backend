@@ -5,6 +5,7 @@ from .views import (
     ParametreSessionViewSet,
     SessionImmersionViewSet,
     SessionsOuvertesPubliquesAPIView,
+    SessionsConsultablesArriveeAPIView,
 )
 
 app_name = "sessions_app"
@@ -18,6 +19,11 @@ urlpatterns = [
         "public/ouvertes-inscription/",
         SessionsOuvertesPubliquesAPIView.as_view(),
         name="sessions-ouvertes-publiques",
+    ),
+    path(
+        "public/consultables-arrivee/",
+        SessionsConsultablesArriveeAPIView.as_view(),
+        name="sessions-consultables-arrivee",
     ),
     path("", include(router.urls)),
 ]

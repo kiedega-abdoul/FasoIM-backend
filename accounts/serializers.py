@@ -141,7 +141,9 @@ class AffectationContexteSerializer(serializers.Serializer):
     est_par_defaut = serializers.BooleanField()
     niveau_affectation = serializers.CharField()
     region_code = serializers.CharField(allow_blank=True)
+    region_nom = serializers.CharField(allow_blank=True)
     centre_id = serializers.IntegerField(allow_null=True)
+    centre_nom = serializers.CharField(allow_blank=True)
     date_debut = serializers.DateField()
     date_fin = serializers.DateField(allow_null=True)
     statut = serializers.CharField()
@@ -426,6 +428,7 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
     )
     affecte_par = ActeurResumeSerializer(read_only=True)
     est_active = serializers.BooleanField(read_only=True)
+    role_codes = serializers.SerializerMethodField()
 
     class Meta:
         model = AffectationActeur
@@ -447,6 +450,7 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
             "affecte_par_id",
             "affecte_par",
             "est_active",
+            "role_codes",
         ]
         read_only_fields = [
             "id",
@@ -458,7 +462,16 @@ class AffectationActeurSerializer(serializers.ModelSerializer):
             "statut",
             "affecte_par",
             "est_active",
+            "role_codes",
         ]
+
+
+    def get_role_codes(self, obj):
+        return sorted({
+            affectation_role.role.code
+            for affectation_role in obj.roles_affectes.all()
+            if affectation_role.est_actif and affectation_role.role.est_actif
+        })
 
     def get_region_nom(self, obj):
         if not obj.region_code:

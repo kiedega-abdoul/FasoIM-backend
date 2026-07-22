@@ -744,6 +744,7 @@ class RemiseKitService:
 
         for remise in remises:
             if remise.statut_remise in {
+                RemiseKit.StatutRemise.REMIS,
                 RemiseKit.StatutRemise.REMPLACE,
                 RemiseKit.StatutRemise.DISPENSE,
             }:

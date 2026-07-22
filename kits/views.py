@@ -44,6 +44,7 @@ from .service import (
     RemiseKitService,
     ValidationKitErreur,
 )
+from accounts.access_context import obtenir_affectation_courante_id
 from .tasks import (
     ProgressionKitsService,
     annuler_remises_lot_task,
@@ -512,6 +513,7 @@ class OperationKitsViewSet(viewsets.GenericViewSet):
         donnees = dict(serializer.validated_data)
         tache = valider_remises_immerges_task.delay(
             acteur_id=request.user.id,
+            affectation_acteur_id=obtenir_affectation_courante_id(),
             **donnees,
         )
         return self._reponse_tache(

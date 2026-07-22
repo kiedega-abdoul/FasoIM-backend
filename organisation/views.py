@@ -281,6 +281,7 @@ class RegleOrganisationCentreViewSet(OrganisationViewSetBase):
                 RegleOrganisationCentreService.marquer_prete_publication(
                     session_id=regle.session_id,
                     centre_id=regle.centre_id,
+                    acteur=request.user,
                 )
             )
         except (
@@ -362,6 +363,11 @@ class RegleOrganisationCentreViewSet(OrganisationViewSetBase):
             else 0
         )
 
+        plan_structures = OrganisationCentreService.planifier_sections_groupes(
+            total=total_affectations,
+            regle=regle,
+        )
+
         structures_generees = sections > 0 and groupes > 0
         groupes_complets = (
             total_affectations > 0
@@ -383,6 +389,7 @@ class RegleOrganisationCentreViewSet(OrganisationViewSetBase):
                 "total_affectations_centre": total_affectations,
                 "sections": sections,
                 "groupes": groupes,
+                "plan_structures": plan_structures,
                 "candidats_groupes": candidats_groupes,
                 "affectations_groupes_actives": affectations_groupes_actives,
                 "propositions_groupes": propositions_groupes,

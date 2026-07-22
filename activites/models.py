@@ -371,9 +371,6 @@ class Seance(models.Model):
         if not self.titre:
             erreurs["titre"] = "Le titre de la séance est obligatoire."
 
-        if self.type_seance == self.TypeSeance.EVALUATION and self.module_activite_id:
-            erreurs["module_activite"] = "Une séance d’évaluation ne dépend pas d’une activité du catalogue."
-
         if not self.lieu:
             erreurs["lieu"] = "Le lieu de la séance est obligatoire."
 
