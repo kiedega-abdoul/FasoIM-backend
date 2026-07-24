@@ -453,6 +453,45 @@ class DocumentsTests(TestCase):
         self.assertEqual(donnees["decision"], ResultatFinal.Decision.ELIGIBLE)
         self.assertIsNone(donnees["moyenne_sur_20"])
 
+    def test_modules_actifs_sans_seance_ni_evaluation_ne_bloquent_pas(self):
+        self.parametres.activites_active = True
+        self.parametres.evaluation_active = True
+        self.parametres.save(
+            update_fields=["activites_active", "evaluation_active", "updated_at"]
+        )
+        self.publier_arrivee()
+
+        statistiques = EligibiliteAttestationService.calculer_centre(
+            session_id=self.session.id,
+            centre_id=self.centre.id,
+            acteur=self.acteur,
+        )
+        resultat = ResultatFinal.objects.get(affectation_centre=self.affectation)
+
+        self.assertEqual(statistiques["total"], 1)
+        self.assertEqual(resultat.decision, ResultatFinal.Decision.ELIGIBLE)
+        self.assertEqual(resultat.taux_presence, Decimal("0.00"))
+        self.assertIsNone(resultat.moyenne_sur_20)
+        self.assertFalse(resultat.evaluation_active)
+        self.assertTrue(resultat.details_calcul["presence_complete"])
+        self.assertTrue(resultat.details_calcul["evaluations_completes"])
+
+    def test_evaluation_active_sans_evaluation_n_ajoute_pas_de_moyenne(self):
+        self.parametres.evaluation_active = True
+        self.parametres.save(update_fields=["evaluation_active", "updated_at"])
+
+        donnees = EligibiliteAttestationService.calculer(
+            affectation=self.affectation,
+            acteur=self.acteur,
+        )
+
+        self.assertEqual(donnees["decision"], ResultatFinal.Decision.ELIGIBLE)
+        self.assertEqual(donnees["evaluations_applicables"], 0)
+        self.assertFalse(donnees["evaluation_active"])
+        self.assertIsNone(donnees["moyenne_sur_20"])
+        self.assertNotIn("AUCUNE_EVALUATION_APPLICABLE", donnees["motifs"])
+        self.assertNotIn("AUCUNE_NOTE_COMPTEE", donnees["motifs"])
+
     def test_moyenne_au_moins_dix_est_eligible(self):
         self.preparer_activites(note=Decimal("12.00"))
         donnees = EligibiliteAttestationService.calculer(

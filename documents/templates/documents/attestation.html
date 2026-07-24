@@ -6,51 +6,218 @@
 <style>
 @page { size: A4 landscape; margin: 0; }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: "DejaVu Sans", Arial, sans-serif; color: #14213d; background: #fff; }
-.page { position: relative; width: 297mm; height: 210mm; padding: 13mm 16mm; overflow: hidden; }
-.frame { position: absolute; inset: 6mm; border: 2.2mm solid #007a3d; }
-.frame:before { content: ""; position: absolute; inset: 2.5mm; border: 1mm solid #fcd116; }
-.frame:after { content: ""; position: absolute; inset: 5mm; border: .8mm solid #ce1126; }
-.content { position: relative; height: 100%; z-index: 2; }
-.header { display: grid; grid-template-columns: 42mm 1fr 42mm; align-items: center; min-height: 36mm; }
-.emblem, .logo { width: 28mm; height: 28mm; object-fit: contain; justify-self: center; }
-.placeholder { width: 28mm; height: 28mm; border: .5mm solid #007a3d; border-radius: 50%; display: grid; place-items: center; font-size: 7pt; text-align: center; color: #007a3d; justify-self: center; }
-.country { text-align: center; font-weight: 700; font-size: 10pt; letter-spacing: .6pt; }
-.motto { text-align: center; font-size: 8.5pt; margin-top: 2mm; }
-.title { text-align: center; margin-top: 2mm; }
-.title h1 { margin: 0; color: #007a3d; font-family: Georgia, serif; font-size: 25pt; letter-spacing: 1.2pt; }
-.title .rule { width: 95mm; height: 1mm; margin: 2mm auto 0; background: linear-gradient(90deg,#007a3d 0 33%,#fcd116 33% 66%,#ce1126 66%); }
-.number { position: absolute; top: 37mm; right: 17mm; font-size: 8.5pt; font-weight: 700; }
-.body { width: 225mm; margin: 5mm auto 0; text-align: center; font-family: Georgia, serif; }
-.intro { font-size: 12.5pt; line-height: 1.55; margin: 0; }
-.name { font-size: 20pt; color: #007a3d; font-weight: 700; margin: 4mm 0 2mm; text-transform: uppercase; }
-.identifiers { display: inline-grid; grid-template-columns: auto auto; gap: 1.5mm 8mm; font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.5pt; text-align: left; background: #f7faf8; border-left: 1.5mm solid #fcd116; padding: 2.5mm 4mm; margin-bottom: 3mm; }
-.text { font-size: 11pt; line-height: 1.55; margin: 2mm 0; }
-.metrics { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.5pt; margin-top: 2mm; color: #354052; }
-.footer { position: absolute; left: 17mm; right: 17mm; bottom: 14mm; display: grid; grid-template-columns: 48mm 1fr 72mm; align-items: end; }
+html, body { width: 297mm; height: 210mm; margin: 0; padding: 0; }
+body {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  color: #1b2b25;
+  background: #ffffff;
+}
+.page {
+  position: relative;
+  width: 297mm;
+  height: 210mm;
+  overflow: hidden;
+}
+.border-green {
+  position: absolute;
+  top: 6mm; right: 6mm; bottom: 6mm; left: 6mm;
+  border: 1.8mm solid #006b35;
+}
+.border-gold {
+  position: absolute;
+  top: 9.5mm; right: 9.5mm; bottom: 9.5mm; left: 9.5mm;
+  border: .55mm solid #d6aa22;
+}
+.border-red {
+  position: absolute;
+  top: 12mm; right: 12mm; bottom: 12mm; left: 12mm;
+  border: .35mm solid #ce1126;
+}
+.watermark {
+  position: absolute;
+  top: 58mm;
+  left: 101mm;
+  width: 95mm;
+  height: 95mm;
+  opacity: .065;
+  object-fit: contain;
+}
+.content {
+  position: absolute;
+  top: 15mm; right: 17mm; bottom: 15mm; left: 17mm;
+}
+.header {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  height: 39mm;
+}
+.header-left, .header-center, .header-right {
+  display: table-cell;
+  vertical-align: middle;
+}
+.header-left, .header-right { width: 39mm; text-align: center; }
+.header-center { text-align: center; }
+.emblem { width: 30mm; height: 32mm; object-fit: contain; }
+.logo { width: 32mm; height: 29mm; object-fit: contain; }
+.placeholder {
+  display: table;
+  width: 28mm;
+  height: 28mm;
+  margin: 0 auto;
+  border: .4mm solid #006b35;
+  border-radius: 14mm;
+  color: #006b35;
+  font-size: 6.5pt;
+}
+.placeholder span { display: table-cell; vertical-align: middle; text-align: center; }
+.country { font-family: Georgia, serif; font-weight: 700; font-size: 11pt; letter-spacing: .7pt; }
+.motto { margin-top: 1.5mm; font-family: Georgia, serif; font-size: 8.5pt; font-style: italic; }
+.title { margin-top: 3mm; font-family: Georgia, serif; font-weight: 700; font-size: 24pt; color: #006b35; letter-spacing: .8pt; }
+.tricolor { width: 106mm; margin: 2mm auto 0; font-size: 0; white-space: nowrap; }
+.tricolor span { display: inline-block; width: 35.33mm; height: .8mm; }
+.tricolor .green { background: #006b35; }
+.tricolor .gold { background: #d6aa22; }
+.tricolor .red { background: #ce1126; }
+.number {
+  width: 126mm;
+  margin: 1.8mm auto 0;
+  padding: 1.4mm 3mm;
+  border: .35mm solid #d6aa22;
+  background: #fffdf5;
+  text-align: center;
+  font-size: 8pt;
+  font-weight: 700;
+}
+.body {
+  width: 226mm;
+  margin: 5mm auto 0;
+  text-align: center;
+  font-family: Georgia, serif;
+}
+.intro { margin: 0; font-size: 12pt; line-height: 1.35; }
+.name {
+  margin: 3mm 0 2mm;
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 21pt;
+  line-height: 1.1;
+  color: #006b35;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.identity-box {
+  display: table;
+  width: 145mm;
+  margin: 0 auto 3mm;
+  table-layout: fixed;
+  border: .35mm solid #d7e2dc;
+  border-left: 1.4mm solid #d6aa22;
+  background: #f7faf8;
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 8.5pt;
+}
+.identity-row { display: table-row; }
+.identity-label, .identity-value { display: table-cell; padding: 1.3mm 3mm; vertical-align: middle; }
+.identity-label { width: 46mm; text-align: right; font-weight: 700; color: #355d4a; }
+.identity-value { text-align: left; font-weight: 600; }
+.text { margin: 2mm 0; font-size: 10.6pt; line-height: 1.48; }
+.metrics {
+  display: inline-block;
+  margin-top: 2mm;
+  padding: 1.8mm 5mm;
+  border-top: .35mm solid #d6aa22;
+  border-bottom: .35mm solid #d6aa22;
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 8.5pt;
+  color: #263d32;
+}
+.footer {
+  position: absolute;
+  right: 0; bottom: 0; left: 0;
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  height: 43mm;
+}
+.footer-left, .footer-center, .footer-right { display: table-cell; vertical-align: bottom; }
+.footer-left { width: 67mm; text-align: left; vertical-align: bottom; }
+.footer-center { text-align: center; padding-bottom: 8mm; }
+.footer-right { width: 82mm; text-align: center; }
+.verification-block { display: table; width: 64mm; table-layout: fixed; }
+.verification-qr, .verification-text { display: table-cell; vertical-align: middle; }
+.verification-qr { width: 29mm; }
+.verification-text { width: 35mm; padding-left: 2mm; }
 .qr { width: 28mm; height: 28mm; object-fit: contain; }
-.verify { font-size: 6.5pt; line-height: 1.3; overflow-wrap: anywhere; margin-top: 1mm; }
-.issue { align-self: end; text-align: center; font-family: Georgia, serif; font-size: 9pt; padding-bottom: 4mm; }
-.signing { position: relative; min-height: 39mm; text-align: center; font-size: 8pt; }
-.signature { width: 44mm; height: 16mm; object-fit: contain; position: absolute; top: 8mm; left: 4mm; z-index: 2; }
-.stamp { width: 26mm; height: 26mm; object-fit: contain; position: absolute; top: 8mm; right: 3mm; opacity: .88; z-index: 1; }
-.signer-name { position: absolute; left: 0; right: 0; bottom: 5mm; font-weight: 700; z-index: 3; }
-.signer-title { position: absolute; left: 0; right: 0; bottom: 0; font-size: 7pt; z-index: 3; }
-.pending { border: .5mm dashed #999; padding: 6mm 3mm; color: #777; font-style: italic; margin-top: 8mm; }
+.verify-title { font-size: 6.7pt; font-weight: 700; color: #006b35; }
+.verify-code { margin-top: 1mm; font-size: 6pt; line-height: 1.25; word-break: break-all; }
+.issue { font-family: Georgia, serif; font-size: 9pt; }
+.signing { position: relative; height: 45mm; font-size: 7.6pt; }
+.signing-function { position: absolute; top: 0; right: 0; left: 0; font-family: Georgia, serif; font-size: 8.5pt; }
+.signature { position: absolute; top: 8mm; left: 4mm; width: 42mm; height: 17mm; object-fit: contain; z-index: 2; }
+.stamp { position: absolute; top: 6mm; right: 4mm; width: 28mm; height: 28mm; object-fit: contain; opacity: .88; z-index: 1; }
+.signer-name { position: absolute; right: 0; bottom: 5.2mm; left: 0; font-weight: 700; font-size: 8pt; z-index: 3; }
+.signer-title { position: absolute; right: 0; bottom: 1mm; left: 0; font-size: 6.8pt; z-index: 3; }
+.pending {
+  margin-top: 8mm;
+  padding: 5mm 3mm;
+  border: .4mm dashed #a2aaa6;
+  color: #6d7571;
+  background: #fafafa;
+  font-style: italic;
+}
+.provisional {
+  position: absolute;
+  top: 92mm;
+  left: 67mm;
+  width: 163mm;
+  text-align: center;
+  transform: rotate(-18deg);
+  color: rgba(160, 30, 30, .08);
+  font-size: 28pt;
+  font-weight: 700;
+  letter-spacing: 2pt;
+}
+.verification-code {
+    display: block;
+    margin-top: 1.5mm;
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: 6.5pt;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: visible;
+    letter-spacing: 0;
+}
+.verification-zone {
+    position: absolute;
+    left: 15mm;
+    bottom: 12mm;
+    width: 92mm;
+    height: 42mm;
+}
 </style>
 </head>
 <body>
 <div class="page">
-  <div class="frame"></div>
+  <div class="border-green"></div>
+  <div class="border-gold"></div>
+  <div class="border-red"></div>
+  {% if logo_data_uri %}<img class="watermark" src="{{ logo_data_uri }}" alt="">{% endif %}
+  {% if not signataire %}<div class="provisional">DOCUMENT PROVISOIRE</div>{% endif %}
+
   <div class="content">
     <div class="header">
-      {% if armoiries_data_uri %}<img class="emblem" src="{{ armoiries_data_uri }}">{% else %}<div class="placeholder">ARMOIRIES<br>BURKINA FASO</div>{% endif %}
-      <div>
-        <div class="country">BURKINA FASO</div>
-        <div class="motto">Unité – Progrès – Justice</div>
-        <div class="title"><h1>ATTESTATION DE PARTICIPATION</h1><div class="rule"></div></div>
+      <div class="header-left">
+        {% if armoiries_data_uri %}<img class="emblem" src="{{ armoiries_data_uri }}" alt="Armoiries du Burkina Faso">{% else %}<div class="placeholder"><span>ARMOIRIES<br>BURKINA FASO</span></div>{% endif %}
       </div>
-      {% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}">{% else %}<div class="placeholder">FASOIM<br>IMMERSION<br>PATRIOTIQUE</div>{% endif %}
+      <div class="header-center">
+        <div class="country">BURKINA FASO</div>
+        <div class="motto">La Patrie ou la Mort, nous Vaincrons</div>
+        <div class="title">ATTESTATION DE PARTICIPATION</div>
+        <div class="tricolor"><span class="green"></span><span class="gold"></span><span class="red"></span></div>
+      </div>
+      <div class="header-right">
+        {% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri }}" alt="Logo FasoIM">{% else %}<div class="placeholder"><span>FASOIM<br>IMMERSION<br>PATRIOTIQUE</span></div>{% endif %}
+      </div>
     </div>
 
     <div class="number">N° {{ document.numero_document }}</div>
@@ -58,28 +225,38 @@ body { margin: 0; font-family: "DejaVu Sans", Arial, sans-serif; color: #14213d;
     <div class="body">
       <p class="intro">Le Directeur régional chargé de l’immersion patriotique atteste que :</p>
       <div class="name">{{ identite.nom_complet }}</div>
-      <div class="identifiers">
-        <strong>Code FasoIM</strong><span>{{ immerge.code_fasoim }}</span>
-        <strong>{{ identifiant_origine_libelle }}</strong><span>{{ identite.identifiant_origine|default:"Non renseigné" }}</span>
+      <div class="identity-box">
+        <div class="identity-row"><div class="identity-label">Code FasoIM</div><div class="identity-value">{{ immerge.code_fasoim }}</div></div>
+        <div class="identity-row"><div class="identity-label">{{ identifiant_origine_libelle }}</div><div class="identity-value">{{ identite.identifiant_origine|default:"Non renseigné" }}</div></div>
       </div>
       <p class="text">a effectivement participé à la session <strong>{{ resultat.session.nom }}</strong> de l’Immersion patriotique, organisée au <strong>{{ resultat.centre.nom }}</strong>, dans la région <strong>{{ resultat.region.nom }}</strong>, du <strong>{{ resultat.session.date_debut|date:"d/m/Y" }}</strong> au <strong>{{ resultat.session.date_fin|date:"d/m/Y" }}</strong>.</p>
       <p class="text">En foi de quoi, la présente attestation lui est délivrée pour servir et valoir ce que de droit.</p>
-      <div class="metrics">Taux de présence : <strong>{{ resultat.taux_presence }} %</strong>{% if resultat.evaluation_active %} &nbsp;•&nbsp; Moyenne : <strong>{{ resultat.moyenne_sur_20 }}/20</strong>{% endif %}</div>
+      <div class="metrics">Taux de présence : <strong>{{ resultat.taux_presence }} %</strong>{% if resultat.moyenne_sur_20 is not None %} &nbsp;•&nbsp; Moyenne : <strong>{{ resultat.moyenne_sur_20 }}/20</strong>{% endif %}</div>
     </div>
 
     <div class="footer">
-      <div><img class="qr" src="{{ qr_data_uri }}"><div class="verify">Vérification : {{ document.code_verification }}</div></div>
-      <div class="issue">Fait le {{ date_delivrance|date:"d/m/Y" }}</div>
-      <div class="signing">
-        {% if signataire %}
-          <div>Le Directeur régional</div>
-          {% if signature_data_uri %}<img class="signature" src="{{ signature_data_uri }}">{% endif %}
-          {% if cachet_data_uri %}<img class="stamp" src="{{ cachet_data_uri }}">{% endif %}
-          <div class="signer-name">{{ signataire.nom_complet|default:signataire.username }}</div>
-          <div class="signer-title">{{ signataire.titre|default:"Directeur régional" }}</div>
-        {% else %}
-          <div class="pending">En attente de validation et de signature régionale</div>
-        {% endif %}
+      <div class="footer-left">
+        <div class="verification-block">
+          <div class="verification-qr"><img class="qr" src="{{ qr_data_uri }}" alt="QR de vérification"></div>
+          <div class="verification-text">
+            <div class="verify-title">Vérification publique</div>
+            <div class="verify-code">{{ document.code_verification }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="footer-center"><div class="issue">Fait le {{ date_delivrance|date:"d/m/Y" }}</div></div>
+      <div class="footer-right">
+        <div class="signing">
+          {% if signataire %}
+            <div class="signing-function">Le Directeur régional</div>
+            {% if signature_data_uri %}<img class="signature" src="{{ signature_data_uri }}" alt="Signature">{% endif %}
+            {% if cachet_data_uri %}<img class="stamp" src="{{ cachet_data_uri }}" alt="Cachet">{% endif %}
+            <div class="signer-name">{{ signataire.nom_complet|default:signataire.username }}</div>
+            <div class="signer-title">{{ fonction_signataire|default:"Directeur régional" }}</div>
+          {% else %}
+            <div class="pending">En attente de validation et de signature régionale</div>
+          {% endif %}
+        </div>
       </div>
     </div>
   </div>

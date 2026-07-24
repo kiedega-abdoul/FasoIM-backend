@@ -19,11 +19,13 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.template.loader import render_to_string
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from openpyxl import Workbook
+from PIL import Image, ImageStat
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4, landscape
@@ -565,11 +567,9 @@ class CentreCertificationService:
             seances = Seance.objects.filter(
                 session=session, centre=centre, deleted_at__isnull=True
             ).exclude(statut__in=[Seance.Statut.ANNULEE, Seance.Statut.REPORTEE])
-            if not seances.exists():
-                blocages.append({
-                    "code": "AUCUNE_SEANCE",
-                    "message": "Aucune séance exploitable n'est enregistrée pour le centre.",
-                })
+            # L'absence totale de séance ne bloque pas la finalisation.
+            # En revanche, dès qu'une séance existe, sa feuille de présence
+            # doit être clôturée pour que le centre soit prêt.
             seances_incompletes = seances.exclude(
                 statut_feuille_presence=Seance.StatutFeuillePresence.CLOTUREE
             ).count()
@@ -580,11 +580,8 @@ class CentreCertificationService:
             evaluations = Evaluation.objects.filter(
                 session=session, centre=centre, deleted_at__isnull=True
             ).exclude(statut=Evaluation.Statut.ANNULEE)
-            if not evaluations.exists():
-                blocages.append({
-                    "code": "AUCUNE_EVALUATION",
-                    "message": "Aucune évaluation exploitable n'est enregistrée pour le centre.",
-                })
+            # L'absence totale d'évaluation ne bloque pas la finalisation.
+            # En revanche, toute évaluation créée doit être clôturée.
             evaluations_incompletes = evaluations.exclude(
                 statut=Evaluation.Statut.CLOTUREE
             ).count()
@@ -742,8 +739,6 @@ class EligibiliteAttestationService:
                 if seance.statut_feuille_presence
                 == Seance.StatutFeuillePresence.CLOTUREE
             ]
-            if not seances_applicables or presence["total_eligible"] == 0:
-                motifs_verification.append("AUCUNE_SEANCE_PRESENCE_EXPLOITABLE")
             if len(seances_cloturees) != len(seances_applicables):
                 motifs_verification.append("FEUILLES_PRESENCE_NON_CLOTUREES")
             if presence["total_seances"] != len(seances_cloturees):
@@ -764,36 +759,43 @@ class EligibiliteAttestationService:
                 1 for evaluation in evaluations_applicables
                 if evaluation.statut == Evaluation.Statut.CLOTUREE
             )
-            if not evaluations_applicables:
-                motifs_verification.append("AUCUNE_EVALUATION_APPLICABLE")
-            elif evaluations_cloturees != len(evaluations_applicables):
-                motifs_verification.append("EVALUATIONS_NON_CLOTUREES")
-            evaluation_ids = [e.id for e in evaluations_applicables if e.statut == Evaluation.Statut.CLOTUREE]
-            notes_ids = set(
-                Note.objects.filter(
-                    affectation_centre=affectation,
-                    evaluation_id__in=evaluation_ids,
-                    deleted_at__isnull=True,
-                    statut_note__in=[Note.StatutNote.NOTEE, Note.StatutNote.ABSENT, Note.StatutNote.DISPENSE],
-                ).values_list("evaluation_id", flat=True)
-            )
-            if len(notes_ids) != len(evaluation_ids):
-                motifs_verification.append("NOTES_EVALUATIONS_INCOMPLETES")
-            calcul_moyenne = NoteService.calculer_moyenne(
-                affectation_centre_id=affectation.id,
-                session_id=session.id,
-                acteur=acteur,
-                verifier_acces=False,
-            )
-            moyenne = calcul_moyenne["moyenne_sur_20"]
-            notes_comptees = calcul_moyenne["notes_comptees"]
-            absences_eval = calcul_moyenne["absences"]
-            dispenses_eval = calcul_moyenne["dispenses"]
-            somme_coefficients = calcul_moyenne["somme_coefficients"]
-            if notes_comptees == 0:
-                motifs_verification.append("AUCUNE_NOTE_COMPTEE")
-            elif moyenne < parametres.moyenne_minimum_attestation:
-                motifs_non_eligibilite.append("MOYENNE_INSUFFISANTE")
+            if evaluations_applicables:
+                if evaluations_cloturees != len(evaluations_applicables):
+                    motifs_verification.append("EVALUATIONS_NON_CLOTUREES")
+                evaluation_ids = [
+                    evaluation.id
+                    for evaluation in evaluations_applicables
+                    if evaluation.statut == Evaluation.Statut.CLOTUREE
+                ]
+                notes_ids = set(
+                    Note.objects.filter(
+                        affectation_centre=affectation,
+                        evaluation_id__in=evaluation_ids,
+                        deleted_at__isnull=True,
+                        statut_note__in=[
+                            Note.StatutNote.NOTEE,
+                            Note.StatutNote.ABSENT,
+                            Note.StatutNote.DISPENSE,
+                        ],
+                    ).values_list("evaluation_id", flat=True)
+                )
+                if len(notes_ids) != len(evaluation_ids):
+                    motifs_verification.append("NOTES_EVALUATIONS_INCOMPLETES")
+                calcul_moyenne = NoteService.calculer_moyenne(
+                    affectation_centre_id=affectation.id,
+                    session_id=session.id,
+                    acteur=acteur,
+                    verifier_acces=False,
+                )
+                moyenne = calcul_moyenne["moyenne_sur_20"]
+                notes_comptees = calcul_moyenne["notes_comptees"]
+                absences_eval = calcul_moyenne["absences"]
+                dispenses_eval = calcul_moyenne["dispenses"]
+                somme_coefficients = calcul_moyenne["somme_coefficients"]
+                if notes_comptees == 0:
+                    motifs_verification.append("AUCUNE_NOTE_COMPTEE")
+                elif moyenne < parametres.moyenne_minimum_attestation:
+                    motifs_non_eligibilite.append("MOYENNE_INSUFFISANTE")
 
         statut_medical = "VISITE_NON_REQUISE"
         participation_autorisee = True
@@ -832,6 +834,10 @@ class EligibiliteAttestationService:
             decision = ResultatFinal.Decision.ELIGIBLE
             motifs = []
 
+        evaluation_effective = bool(
+            parametres.evaluation_active and evaluations_applicables
+        )
+
         donnees = {
             "session": session,
             "region": affectation.centre.region,
@@ -848,7 +854,7 @@ class EligibiliteAttestationService:
             "dispenses_presence": presence["dispenses"],
             "taux_presence": presence["taux_presence"],
             "seuil_presence": presence["seuil_attestation"],
-            "evaluation_active": parametres.evaluation_active,
+            "evaluation_active": evaluation_effective,
             "evaluations_applicables": len(evaluations_applicables),
             "evaluations_cloturees": evaluations_cloturees,
             "notes_comptees": notes_comptees,
@@ -864,8 +870,18 @@ class EligibiliteAttestationService:
             "decision": decision,
             "motifs": motifs,
             "details_calcul": {
-                "presence_complete": not any(m.startswith("AUCUNE_SEANCE") for m in motifs_verification),
-                "evaluations_completes": not any(m in {"EVALUATIONS_NON_CLOTUREES", "NOTES_EVALUATIONS_INCOMPLETES", "AUCUNE_EVALUATION_APPLICABLE", "AUCUNE_NOTE_COMPTEE"} for m in motifs_verification),
+                "presence_complete": not any(
+                    motif in {"FEUILLES_PRESENCE_NON_CLOTUREES", "PRESENCES_INCOMPLETES"}
+                    for motif in motifs_verification
+                ),
+                "evaluations_completes": not any(
+                    motif in {
+                        "EVALUATIONS_NON_CLOTUREES",
+                        "NOTES_EVALUATIONS_INCOMPLETES",
+                        "AUCUNE_NOTE_COMPTEE",
+                    }
+                    for motif in motifs_verification
+                ),
             },
             "calcule_par": acteur,
             "date_calcul": timezone.now(),
@@ -1074,6 +1090,74 @@ class GenerationFichierService:
             return ""
 
     @staticmethod
+    def _champ_attestation_en_data_uri(champ, *, nature):
+        """
+        Prépare les images du signataire pour le PDF sans modifier le fichier stocké.
+
+        - signature : transforme une signature blanche sur fond noir en encre sombre
+          sur fond transparent ; gère aussi une signature sombre sur fond clair ;
+        - cachet : rend uniquement le fond noir extérieur transparent tout en
+          conservant les couleurs et le blanc du cachet.
+        """
+        if not champ:
+            return ""
+        try:
+            champ.open("rb")
+            contenu = champ.read()
+            champ.close()
+            if not contenu:
+                return ""
+
+            image = Image.open(io.BytesIO(contenu)).convert("RGBA")
+
+            if nature == "signature":
+                gris = image.convert("L")
+                largeur, hauteur = gris.size
+                marge_x = max(1, largeur // 20)
+                marge_y = max(1, hauteur // 20)
+                coins = Image.new("L", (marge_x * 4, marge_y))
+                coins.paste(gris.crop((0, 0, marge_x, marge_y)), (0, 0))
+                coins.paste(gris.crop((largeur - marge_x, 0, largeur, marge_y)), (marge_x, 0))
+                coins.paste(gris.crop((0, hauteur - marge_y, marge_x, hauteur)), (marge_x * 2, 0))
+                coins.paste(
+                    gris.crop((largeur - marge_x, hauteur - marge_y, largeur, hauteur)),
+                    (marge_x * 3, 0),
+                )
+                fond_sombre = ImageStat.Stat(coins).mean[0] < 110
+
+                # Le masque alpha garde uniquement les traits de la signature.
+                alpha = gris if fond_sombre else gris.point(lambda valeur: 255 - valeur)
+                alpha = alpha.point(lambda valeur: 0 if valeur < 28 else min(255, valeur))
+                encre = Image.new("RGBA", image.size, (18, 64, 43, 0))
+                encre.putalpha(alpha)
+                image = encre
+
+            elif nature == "cachet":
+                pixels = []
+                for rouge, vert, bleu, alpha in image.getdata():
+                    # Le noir presque pur correspond au fond ajouté autour du cachet.
+                    if alpha and max(rouge, vert, bleu) < 38:
+                        pixels.append((rouge, vert, bleu, 0))
+                    else:
+                        pixels.append((rouge, vert, bleu, alpha))
+                image.putdata(pixels)
+
+            sortie = io.BytesIO()
+            image.save(sortie, format="PNG", optimize=True)
+            return (
+                "data:image/png;base64,"
+                + base64.b64encode(sortie.getvalue()).decode("ascii")
+            )
+        except (
+            ValueError,
+            OSError,
+            FileNotFoundError,
+            NotImplementedError,
+            Image.DecompressionBombError,
+        ):
+            return ""
+
+    @staticmethod
     def _fichier_en_data_uri(chemin, *, type_mime="image/png"):
         if not chemin:
             return ""
@@ -1087,6 +1171,20 @@ class GenerationFichierService:
         except (OSError, ValueError, TypeError):
             return ""
 
+    @classmethod
+    def _image_statique_en_data_uri(cls, *, setting_name, static_path):
+        """Charge une image configurée ou, à défaut, une ressource static Django."""
+        chemin_configure = getattr(settings, setting_name, "")
+        if chemin_configure:
+            data_uri = cls._fichier_en_data_uri(chemin_configure)
+            if data_uri:
+                return data_uri
+
+        chemin_statique = finders.find(static_path)
+        if isinstance(chemin_statique, (list, tuple)):
+            chemin_statique = chemin_statique[0] if chemin_statique else ""
+        return cls._fichier_en_data_uri(chemin_statique)
+
     @staticmethod
     def _libelle_identifiant_origine(type_immerge):
         return {
@@ -1096,6 +1194,22 @@ class GenerationFichierService:
             Immerge.TypeImmerge.SELECTIONNE: "Matricule / référence",
             Immerge.TypeImmerge.VOLONTAIRE: "Code de suivi",
         }.get(type_immerge, "Identifiant d'origine")
+
+    @staticmethod
+    def _fonction_signataire_attestation(signataire):
+        """Normalise les libellés de fonction connus sans modifier la base."""
+        if not signataire:
+            return ""
+        valeur = str(getattr(signataire, "titre", "") or "").strip()
+        normalisations = {
+            "directeur regionale": "Directrice régionale",
+            "directeur régionale": "Directrice régionale",
+            "directrice regionale": "Directrice régionale",
+            "directrice régionale": "Directrice régionale",
+            "directeur regional": "Directeur régional",
+            "directeur régional": "Directeur régional",
+        }
+        return normalisations.get(valeur.casefold(), valeur or "Directeur régional")
 
     @classmethod
     def pdf_attestation(cls, *, resultat, document, signataire=None):
@@ -1117,19 +1231,28 @@ class GenerationFichierService:
             "qr_data_uri": f"data:image/png;base64,{base64.b64encode(qr).decode('ascii')}",
             "verification_url": verification_url,
             "signataire": signataire,
+            "fonction_signataire": cls._fonction_signataire_attestation(signataire),
             "signature_data_uri": (
-                cls._champ_en_data_uri(getattr(signataire, "signature_image", None))
+                cls._champ_attestation_en_data_uri(
+                    getattr(signataire, "signature_image", None),
+                    nature="signature",
+                )
                 if signataire else ""
             ),
             "cachet_data_uri": (
-                cls._champ_en_data_uri(getattr(signataire, "cachet_image", None))
+                cls._champ_attestation_en_data_uri(
+                    getattr(signataire, "cachet_image", None),
+                    nature="cachet",
+                )
                 if signataire else ""
             ),
-            "armoiries_data_uri": cls._fichier_en_data_uri(
-                getattr(settings, "FASOIM_ATTESTATION_ARMOIRIES_PATH", "")
+            "armoiries_data_uri": cls._image_statique_en_data_uri(
+                setting_name="FASOIM_ATTESTATION_ARMOIRIES_PATH",
+                static_path="documents/attestations/armoiries_burkina.png",
             ),
-            "logo_data_uri": cls._fichier_en_data_uri(
-                getattr(settings, "FASOIM_ATTESTATION_LOGO_PATH", "")
+            "logo_data_uri": cls._image_statique_en_data_uri(
+                setting_name="FASOIM_ATTESTATION_LOGO_PATH",
+                static_path="documents/attestations/logo_fasoim.png",
             ),
             "date_delivrance": timezone.localdate(),
         }
